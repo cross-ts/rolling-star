@@ -49,7 +49,7 @@ type Session struct {
 
 	mu       sync.Mutex
 	servers  []*Downstream          // config order; populated by initialize (§4.2)
-	docs     map[string]*Downstream // documentURI -> bound server; populated in T6
+	docs     map[string]*Downstream // documentURI -> bound server (nil = known unroutable)
 	rootPath string
 	shutdown bool
 
@@ -129,15 +129,8 @@ func (s *Session) Handle(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Messag
 	case "exit":
 		s.handleExit()
 	default:
-		// T6: document routing and forwarding (client->server) and the
-		// §4.4 policy table for document-context-less messages. Until
-		// then, requests get MethodNotFound and notifications are
-		// dropped, which is a safe (if unhelpful) default.
-		if m.IsRequest() {
-			_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
-				Code:    jsonrpc.CodeMethodNotFound,
-				Message: fmt.Sprintf("rolling-star: method not implemented: %s", m.Method),
-			})
-		}
+		// Document routing and forwarding (client->server), and the §4.4
+		// policy table for document-context-less messages. See routing.go.
+		s.route(c, m)
 	}
 }

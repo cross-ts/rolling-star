@@ -76,6 +76,10 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 			s.log.Error("initialize: failed to start server", "server", def.Name, "error", err)
 			continue
 		}
+		// Wire the server->client direction now that d exists. Same
+		// package, so setting the unexported field directly is simplest;
+		// see downstreamHandler's doc comment for what it does.
+		d.handler = &downstreamHandler{s: s, d: d}
 
 		if _, err := d.Initialize(ctx, params); err != nil {
 			s.log.Error("initialize: server failed to initialize", "server", def.Name, "error", err)

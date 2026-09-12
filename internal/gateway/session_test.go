@@ -43,8 +43,18 @@ func multiLauncher(byName map[string]*fakeServer) Launcher {
 
 // newTestSession wires a Session to launch fakes and starts Serve on one
 // end of an in-memory pipe, returning a client-side jsonrpc.Conn playing
-// the role of the upstream editor.
+// the role of the upstream editor, with noopHandler standing in for the
+// editor's own request/notification handling.
 func newTestSession(t *testing.T, cfg *config.Config, byName map[string]*fakeServer) *jsonrpc.Conn {
+	t.Helper()
+	return newTestSessionWithHandler(t, cfg, byName, noopHandler{})
+}
+
+// newTestSessionWithHandler is like newTestSession but lets the caller
+// supply the client-side handler, for tests that need the "editor" to
+// answer downstream-initiated requests (e.g. workspace/configuration) or
+// record notifications (e.g. publishDiagnostics) pushed to it.
+func newTestSessionWithHandler(t *testing.T, cfg *config.Config, byName map[string]*fakeServer, clientHandler jsonrpc.Handler) *jsonrpc.Conn {
 	t.Helper()
 
 	sess, err := New(cfg, Options{Launcher: multiLauncher(byName), Logger: testLogger(t)})
@@ -53,7 +63,7 @@ func newTestSession(t *testing.T, cfg *config.Config, byName map[string]*fakeSer
 	}
 
 	clientSide, gatewaySide := net.Pipe()
-	client := jsonrpc.NewConn(clientSide, noopHandler{})
+	client := jsonrpc.NewConn(clientSide, clientHandler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
