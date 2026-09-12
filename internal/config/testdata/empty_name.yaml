@@ -1,0 +1,5 @@
+servers:
+  - name: ""
+    command: some-language-server
+    selectors:
+      - language: go

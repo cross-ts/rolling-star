@@ -1,0 +1,9 @@
+servers:
+  - name: dup
+    command: server-a
+    selectors:
+      - language: go
+  - name: dup
+    command: server-b
+    selectors:
+      - language: python

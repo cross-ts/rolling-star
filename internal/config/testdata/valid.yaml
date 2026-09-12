@@ -1,0 +1,17 @@
+servers:
+  - name: actions
+    command: actions-languageserver
+    args: ["--stdio"]
+    selectors:
+      - language: yaml
+        pattern: ".github/workflows/**/*.{yml,yaml}"
+
+  - name: yaml
+    command: yaml-language-server
+    args: ["--stdio"]
+    initializationOptions:
+      yaml:
+        validate: true
+    selectors:
+      - language: yaml
+        pattern: "**/*.{yml,yaml}"
