@@ -40,7 +40,7 @@ func newTestGateway(t *testing.T, cfg *config.Config, byName map[string]*fakeSer
 	return newTestGatewayWithHandler(t, cfg, byName, noopHandler{})
 }
 
-func newTestGatewayWithHandler(t *testing.T, cfg *config.Config, byName map[string]*fakeServer, clientHandler jsonrpc.Handler) *jsonrpc.Conn {
+func newTestGatewayWithHandler(t *testing.T, cfg *config.Config, byName map[string]*fakeServer, clientHandler messageHandler) *jsonrpc.Conn {
 	t.Helper()
 
 	g, err := New(cfg.Servers, Options{Launcher: multiLauncher(byName), Logger: testLogger(t)})
@@ -49,12 +49,12 @@ func newTestGatewayWithHandler(t *testing.T, cfg *config.Config, byName map[stri
 	}
 
 	clientSide, gatewaySide := net.Pipe()
-	client := jsonrpc.NewConn(clientSide, clientHandler)
+	client := jsonrpc.NewConn(clientSide)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	go client.Run(ctx)
+	go func() { _ = runMessages(ctx, client, clientHandler) }()
 	go g.Serve(ctx, gatewaySide)
 
 	return client

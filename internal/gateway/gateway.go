@@ -19,19 +19,25 @@ type Options struct {
 	Logger *slog.Logger
 }
 
+type languageServerMessage struct {
+	conn    *jsonrpc.Conn
+	message *jsonrpc.Message
+}
+
 type Gateway struct {
 	definitions []config.LanguageServer
 	router      *router.Router
 	log         *slog.Logger
 	launch      Launcher
 
-	upstream *jsonrpc.Conn
+	client *jsonrpc.Conn
 
-	mu              sync.Mutex
-	languageServers []*LanguageServer
-	documentServers map[string]*LanguageServer
-	rootPath        string
-	shutdown        bool
+	mu                     sync.Mutex
+	languageServers        []*LanguageServer
+	documentServers        map[string]*LanguageServer
+	rootPath               string
+	shutdown               bool
+	languageServerMessages chan languageServerMessage
 }
 
 func New(definitions []config.LanguageServer, opts Options) (*Gateway, error) {
@@ -61,17 +67,36 @@ func New(definitions []config.LanguageServer, opts Options) (*Gateway, error) {
 	}
 
 	return &Gateway{
-		definitions:     slices.Clone(definitions),
-		router:          r,
-		log:             log,
-		launch:          launch,
-		documentServers: make(map[string]*LanguageServer),
+		definitions:            slices.Clone(definitions),
+		router:                 r,
+		log:                    log,
+		launch:                 launch,
+		documentServers:        make(map[string]*LanguageServer),
+		languageServerMessages: make(chan languageServerMessage),
 	}, nil
 }
 
 func (g *Gateway) Serve(ctx context.Context, transport io.ReadWriteCloser) error {
-	g.upstream = jsonrpc.NewConn(transport, g)
-	return g.upstream.Run(ctx)
+	g.client = jsonrpc.NewConn(transport)
+	clientDone := make(chan error, 1)
+	go func() { clientDone <- g.client.Run(ctx) }()
+
+	for {
+		select {
+		case m, ok := <-g.client.Messages():
+			if !ok {
+				return <-clientDone
+			}
+			g.handleClientMessage(ctx, g.client, m)
+		case event := <-g.languageServerMessages:
+			g.handleLanguageServerMessage(event)
+		case err := <-clientDone:
+			return err
+		case <-ctx.Done():
+			_ = g.client.Close()
+			return ctx.Err()
+		}
+	}
 }
 
 func (g *Gateway) ShutdownReceived() bool {
@@ -80,7 +105,7 @@ func (g *Gateway) ShutdownReceived() bool {
 	return g.shutdown
 }
 
-func (g *Gateway) Handle(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
+func (g *Gateway) handleClientMessage(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
 	switch m.Method {
 	case "initialize":
 		g.handleInitialize(ctx, c, m)
@@ -93,4 +118,8 @@ func (g *Gateway) Handle(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Messag
 	default:
 		g.route(c, m)
 	}
+}
+
+func (g *Gateway) handleLanguageServerMessage(event languageServerMessage) {
+	relay(g.log, event.conn, g.client, event.message, "client")
 }

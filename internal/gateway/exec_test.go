@@ -37,8 +37,8 @@ func (execFakeHandler) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Mes
 }
 
 func runFakeLanguageServer() {
-	conn := jsonrpc.NewConn(Stdio(), execFakeHandler{})
-	_ = conn.Run(context.Background())
+	conn := jsonrpc.NewConn(Stdio())
+	_ = runMessages(context.Background(), conn, execFakeHandler{})
 }
 
 func TestExecLauncher_RealProcess(t *testing.T) {
@@ -57,10 +57,11 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	server, err := StartLanguageServer(ctx, def, nil, nil, nil)
+	server, err := StartLanguageServer(ctx, def, nil)
 	if err != nil {
 		t.Fatalf("StartLanguageServer: %v", err)
 	}
+	go func() { _ = runMessages(ctx, server.Conn(), nil) }()
 
 	caps, err := server.Initialize(ctx, json.RawMessage(`{}`))
 	if err != nil {

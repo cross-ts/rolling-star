@@ -11,14 +11,9 @@ import (
 	"sync/atomic"
 )
 
-type Handler interface {
-	Handle(ctx context.Context, c *Conn, m *Message)
-}
-
 type Conn struct {
 	rwc io.ReadWriteCloser
 	r   *bufio.Reader
-	h   Handler
 
 	readBuf []byte
 
@@ -31,22 +26,24 @@ type Conn struct {
 	pending map[ID]chan *Message
 	closed  bool
 
-	done chan struct{}
+	done     chan struct{}
+	messages chan *Message
 }
 
-func NewConn(rwc io.ReadWriteCloser, h Handler) *Conn {
+func NewConn(rwc io.ReadWriteCloser) *Conn {
 	return &Conn{
-		rwc:     rwc,
-		r:       bufio.NewReader(rwc),
-		h:       h,
-		pending: make(map[ID]chan *Message),
-		done:    make(chan struct{}),
+		rwc:      rwc,
+		r:        bufio.NewReader(rwc),
+		pending:  make(map[ID]chan *Message),
+		done:     make(chan struct{}),
+		messages: make(chan *Message),
 	}
 }
 
 func (c *Conn) Run(ctx context.Context) error {
 	defer c.releasePending()
 	defer close(c.done)
+	defer close(c.messages)
 
 	for {
 		body, err := readFrame(c.r, c.readBuf)
@@ -58,19 +55,21 @@ func (c *Conn) Run(ctx context.Context) error {
 		}
 		c.readBuf = body
 
-		var m Message
-		if err := json.Unmarshal(body, &m); err != nil {
+		m := new(Message)
+		if err := json.Unmarshal(body, m); err != nil {
 
 			continue
 		}
 
 		if m.IsResponse() {
-			c.resolvePending(&m)
+			c.resolvePending(m)
 			continue
 		}
 
-		if c.h != nil {
-			c.h.Handle(ctx, c, &m)
+		select {
+		case c.messages <- m:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
@@ -117,6 +116,10 @@ func (c *Conn) Reply(id ID, result json.RawMessage, e *Error) error {
 
 func (c *Conn) Done() <-chan struct{} {
 	return c.done
+}
+
+func (c *Conn) Messages() <-chan *Message {
+	return c.messages
 }
 
 func (c *Conn) Close() error {

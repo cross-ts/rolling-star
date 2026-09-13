@@ -22,10 +22,11 @@ func TestStartLanguageServer_InitializeCapabilitiesShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	server, err := StartLanguageServer(ctx, def, nil, nil, launch)
+	server, err := StartLanguageServer(ctx, def, launch)
 	if err != nil {
 		t.Fatalf("StartLanguageServer: %v", err)
 	}
+	go func() { _ = runMessages(ctx, server.Conn(), nil) }()
 
 	gotCaps, err := server.Initialize(ctx, json.RawMessage(`{"processId":1}`))
 	if err != nil {
@@ -74,10 +75,11 @@ func TestStartLanguageServer_InitializeFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	server, err := StartLanguageServer(ctx, def, nil, nil, launch)
+	server, err := StartLanguageServer(ctx, def, launch)
 	if err != nil {
 		t.Fatalf("StartLanguageServer: %v", err)
 	}
+	go func() { _ = runMessages(ctx, server.Conn(), nil) }()
 
 	if _, err := server.Initialize(ctx, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("Initialize: expected error, got nil")

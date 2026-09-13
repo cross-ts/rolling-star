@@ -18,6 +18,22 @@ type recordingHandler struct {
 	reply func(m *Message) (json.RawMessage, *Error)
 }
 
+type messageHandler interface {
+	Handle(context.Context, *Conn, *Message)
+}
+
+func runMessageHandler(ctx context.Context, conn *Conn, handler messageHandler) error {
+	done := make(chan error, 1)
+	go func() { done <- conn.Run(ctx) }()
+
+	for message := range conn.Messages() {
+		if handler != nil {
+			handler.Handle(ctx, conn, message)
+		}
+	}
+	return <-done
+}
+
 func (h *recordingHandler) Handle(ctx context.Context, c *Conn, m *Message) {
 	h.mu.Lock()
 	h.received = append(h.received, m)
@@ -42,19 +58,19 @@ func withTimeout(t *testing.T) context.Context {
 	return ctx
 }
 
-func newPipeConns(t *testing.T, serverHandler, clientHandler Handler) (server, client *Conn, ctx context.Context) {
+func newPipeConns(t *testing.T, serverHandler, clientHandler messageHandler) (server, client *Conn, ctx context.Context) {
 	t.Helper()
 	a, b := net.Pipe()
-	server = NewConn(a, serverHandler)
-	client = NewConn(b, clientHandler)
+	server = NewConn(a)
+	client = NewConn(b)
 	t.Cleanup(func() {
 		_ = server.Close()
 		_ = client.Close()
 	})
 
 	ctx = withTimeout(t)
-	go func() { _ = server.Run(ctx) }()
-	go func() { _ = client.Run(ctx) }()
+	go func() { _ = runMessageHandler(ctx, server, serverHandler) }()
+	go func() { _ = runMessageHandler(ctx, client, clientHandler) }()
 
 	return server, client, ctx
 }

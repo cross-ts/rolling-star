@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
@@ -13,27 +12,23 @@ import (
 type LanguageServer struct {
 	definition config.LanguageServer
 
-	proc     Process
-	conn     *jsonrpc.Conn
-	upstream *jsonrpc.Conn
-	log      *slog.Logger
+	proc Process
+	conn *jsonrpc.Conn
 }
 
-func StartLanguageServer(ctx context.Context, def config.LanguageServer, upstream *jsonrpc.Conn, log *slog.Logger, launch Launcher) (*LanguageServer, error) {
+func StartLanguageServer(ctx context.Context, def config.LanguageServer, launch Launcher) (*LanguageServer, error) {
 	if launch == nil {
 		launch = ExecLauncher
 	}
 
-	server := &LanguageServer{definition: def, upstream: upstream, log: log}
+	server := &LanguageServer{definition: def}
 
 	proc, err := launch(ctx, def)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: start %s: %w", def.Name, err)
 	}
 	server.proc = proc
-	server.conn = jsonrpc.NewConn(proc, server)
-
-	go server.conn.Run(ctx)
+	server.conn = jsonrpc.NewConn(proc)
 
 	return server, nil
 }
