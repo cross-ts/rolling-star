@@ -50,12 +50,12 @@ func (e *testEditor) Diagnostics() []received {
 	return slices.Clone(e.diagnostics)
 }
 
-func setupRoutedSession(t *testing.T) (client *jsonrpc.Conn, editor *testEditor, actionsFake, yamlFake *fakeServer) {
+func setupRoutedGateway(t *testing.T) (client *jsonrpc.Conn, editor *testEditor, actionsFake, yamlFake *fakeServer) {
 	t.Helper()
-	return setupRoutedSessionWithConfig(t, twoServerConfig())
+	return setupRoutedGatewayWithConfig(t, twoServerConfig())
 }
 
-func setupRoutedSessionWithConfig(t *testing.T, cfg *config.Config) (client *jsonrpc.Conn, editor *testEditor, actionsFake, yamlFake *fakeServer) {
+func setupRoutedGatewayWithConfig(t *testing.T, cfg *config.Config) (client *jsonrpc.Conn, editor *testEditor, actionsFake, yamlFake *fakeServer) {
 	t.Helper()
 
 	actionsFake = newFakeServer(json.RawMessage(`{}`))
@@ -63,7 +63,7 @@ func setupRoutedSessionWithConfig(t *testing.T, cfg *config.Config) (client *jso
 	byName := map[string]*fakeServer{"actions": actionsFake, "yaml": yamlFake}
 
 	editor = newTestEditor()
-	client = newTestSessionWithHandler(t, cfg, byName, editor)
+	client = newTestGatewayWithHandler(t, cfg, byName, editor)
 
 	resp := mustCall(t, client, "initialize", json.RawMessage(`{"rootUri":"file:///repo"}`))
 	if resp.Error != nil {
@@ -145,7 +145,7 @@ func hasMethod(fake *fakeServer, method string) bool {
 }
 
 func TestRouting_DidOpen_WorkflowGoesToActionsOnly(t *testing.T) {
-	client, _, actionsFake, yamlFake := setupRoutedSession(t)
+	client, _, actionsFake, yamlFake := setupRoutedGateway(t)
 
 	if err := client.Notify("textDocument/didOpen", didOpenParams(
 		"file:///repo/.github/workflows/ci.yml", "yaml", "name: CI\n")); err != nil {
@@ -159,7 +159,7 @@ func TestRouting_DidOpen_WorkflowGoesToActionsOnly(t *testing.T) {
 }
 
 func TestRouting_DidOpen_PlainYAMLGoesToYAMLOnly(t *testing.T) {
-	client, _, actionsFake, yamlFake := setupRoutedSession(t)
+	client, _, actionsFake, yamlFake := setupRoutedGateway(t)
 
 	if err := client.Notify("textDocument/didOpen", didOpenParams(
 		"file:///repo/docker-compose.yml", "yaml", "services: {}\n")); err != nil {
@@ -173,7 +173,7 @@ func TestRouting_DidOpen_PlainYAMLGoesToYAMLOnly(t *testing.T) {
 }
 
 func TestRouting_HoverAfterDidOpen(t *testing.T) {
-	client, _, actionsFake, _ := setupRoutedSession(t)
+	client, _, actionsFake, _ := setupRoutedGateway(t)
 	uri := openWorkflowDoc(t, client, actionsFake)
 
 	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
@@ -189,7 +189,7 @@ func TestRouting_HoverAfterDidOpen(t *testing.T) {
 }
 
 func TestRouting_DidCloseUnbinds(t *testing.T) {
-	client, _, actionsFake, _ := setupRoutedSession(t)
+	client, _, actionsFake, _ := setupRoutedGateway(t)
 	uri := openWorkflowDoc(t, client, actionsFake)
 
 	closeParams, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": uri}})
@@ -209,7 +209,7 @@ func TestRouting_DidCloseUnbinds(t *testing.T) {
 
 func TestRouting_RequestBeforeDidOpenRoutesOnTheFly(t *testing.T) {
 
-	client, _, actionsFake, _ := setupRoutedSessionWithConfig(t, patternOnlyConfig())
+	client, _, actionsFake, _ := setupRoutedGatewayWithConfig(t, patternOnlyConfig())
 
 	uri := "file:///repo/.github/workflows/ci.yml"
 	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
@@ -222,7 +222,7 @@ func TestRouting_RequestBeforeDidOpenRoutesOnTheFly(t *testing.T) {
 }
 
 func TestRouting_UnroutableDocumentIsDroppedSilently(t *testing.T) {
-	client, _, actionsFake, yamlFake := setupRoutedSession(t)
+	client, _, actionsFake, yamlFake := setupRoutedGateway(t)
 
 	uri := "file:///repo/README.md"
 	if err := client.Notify("textDocument/didOpen", didOpenParams(uri, "markdown", "# hi\n")); err != nil {
@@ -231,7 +231,7 @@ func TestRouting_UnroutableDocumentIsDroppedSilently(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 	if hasMethod(actionsFake, "textDocument/didOpen") || hasMethod(yamlFake, "textDocument/didOpen") {
-		t.Fatal("unroutable document's didOpen reached a downstream server")
+		t.Fatal("unroutable document's didOpen reached a language server")
 	}
 
 	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
@@ -244,7 +244,7 @@ func TestRouting_UnroutableDocumentIsDroppedSilently(t *testing.T) {
 }
 
 func TestRouting_PublishDiagnosticsReachesClient(t *testing.T) {
-	client, editor, actionsFake, _ := setupRoutedSession(t)
+	client, editor, actionsFake, _ := setupRoutedGateway(t)
 	uri := openWorkflowDoc(t, client, actionsFake)
 
 	diags, _ := json.Marshal([]map[string]any{{"message": "boom", "severity": 1}})
@@ -259,8 +259,8 @@ func TestRouting_PublishDiagnosticsReachesClient(t *testing.T) {
 	}
 }
 
-func TestRouting_DownstreamRequestIDIsRemapped(t *testing.T) {
-	client, editor, actionsFake, _ := setupRoutedSession(t)
+func TestRouting_LanguageServerRequestIDIsRemapped(t *testing.T) {
+	client, editor, actionsFake, _ := setupRoutedGateway(t)
 	openWorkflowDoc(t, client, actionsFake)
 
 	items, _ := json.Marshal([]map[string]any{{"section": "yaml"}})
@@ -278,7 +278,7 @@ func TestRouting_DownstreamRequestIDIsRemapped(t *testing.T) {
 			t.Errorf("workspace/configuration result = %s, want the editor's canned result", msg.Result)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for workspace/configuration response to route back to the downstream")
+		t.Fatal("timed out waiting for workspace/configuration response to route back to the language server")
 	}
 
 	if len(editor.configRequests) != 1 {
@@ -286,8 +286,8 @@ func TestRouting_DownstreamRequestIDIsRemapped(t *testing.T) {
 	}
 }
 
-func TestRouting_DownstreamErrorPropagatesUpstream(t *testing.T) {
-	client, _, actionsFake, _ := setupRoutedSession(t)
+func TestRouting_LanguageServerErrorPropagatesUpstream(t *testing.T) {
+	client, _, actionsFake, _ := setupRoutedGateway(t)
 	uri := openWorkflowDoc(t, client, actionsFake)
 
 	resp := mustCall(t, client, "textDocument/definition", positionParams(uri))
@@ -298,12 +298,12 @@ func TestRouting_DownstreamErrorPropagatesUpstream(t *testing.T) {
 		t.Errorf("error code = %d, want %d", resp.Error.Code, jsonrpc.CodeMethodNotFound)
 	}
 	if resp.Error.Message == "" {
-		t.Error("error message was empty; expected the downstream's message to survive")
+		t.Error("error message was empty; expected the language server's message to survive")
 	}
 }
 
 func TestRouting_NotificationOrderingPreserved(t *testing.T) {
-	client, _, actionsFake, _ := setupRoutedSession(t)
+	client, _, actionsFake, _ := setupRoutedGateway(t)
 	uri := openWorkflowDoc(t, client, actionsFake)
 
 	changeParams, _ := json.Marshal(map[string]any{
@@ -323,19 +323,19 @@ func TestRouting_NotificationOrderingPreserved(t *testing.T) {
 }
 
 func TestRouting_CancelRequestIsDropped(t *testing.T) {
-	client, _, actionsFake, yamlFake := setupRoutedSession(t)
+	client, _, actionsFake, yamlFake := setupRoutedGateway(t)
 
 	if err := client.Notify("$/cancelRequest", json.RawMessage(`{"id":1}`)); err != nil {
 		t.Fatalf("notify $/cancelRequest: %v", err)
 	}
 	time.Sleep(100 * time.Millisecond)
 	if hasMethod(actionsFake, "$/cancelRequest") || hasMethod(yamlFake, "$/cancelRequest") {
-		t.Fatal("$/cancelRequest should never be forwarded to any downstream")
+		t.Fatal("$/cancelRequest should never be forwarded to any language server")
 	}
 }
 
 func TestRouting_WorkspaceDidChangeConfigurationIsBroadcast(t *testing.T) {
-	client, _, actionsFake, yamlFake := setupRoutedSession(t)
+	client, _, actionsFake, yamlFake := setupRoutedGateway(t)
 
 	if err := client.Notify("workspace/didChangeConfiguration", json.RawMessage(`{"settings":{}}`)); err != nil {
 		t.Fatalf("notify: %v", err)
@@ -346,7 +346,7 @@ func TestRouting_WorkspaceDidChangeConfigurationIsBroadcast(t *testing.T) {
 }
 
 func TestRouting_WorkspaceSymbolIsMethodNotFound(t *testing.T) {
-	client, _, _, _ := setupRoutedSession(t)
+	client, _, _, _ := setupRoutedGateway(t)
 
 	resp := mustCall(t, client, "workspace/symbol", json.RawMessage(`{"query":"foo"}`))
 	if resp.Error == nil {

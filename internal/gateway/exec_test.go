@@ -57,12 +57,12 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	d, err := StartDownstream(ctx, def, nil)
+	server, err := StartLanguageServer(ctx, def, nil, nil, nil)
 	if err != nil {
-		t.Fatalf("StartDownstream: %v", err)
+		t.Fatalf("StartLanguageServer: %v", err)
 	}
 
-	caps, err := d.Initialize(ctx, json.RawMessage(`{}`))
+	caps, err := server.Initialize(ctx, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -70,29 +70,29 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 		t.Errorf("Initialize capabilities = %s, want {\"hoverProvider\":true}", caps)
 	}
 
-	if err := d.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
+	if err := server.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("Notify initialized: %v", err)
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer shutdownCancel()
-	if err := d.Shutdown(shutdownCtx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	if err := d.Conn().Notify("exit", nil); err != nil {
+	if err := server.Conn().Notify("exit", nil); err != nil {
 		t.Fatalf("Notify exit: %v", err)
 	}
 
 	waited := make(chan error, 1)
-	go func() { waited <- d.Wait() }()
+	go func() { waited <- server.Wait() }()
 	select {
 	case <-waited:
 	case <-time.After(5 * time.Second):
-		t.Fatal("real downstream process did not exit within the grace period after \"exit\"")
+		t.Fatal("real language server process did not exit within the grace period after \"exit\"")
 	}
 
-	if err := d.Terminate(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := server.Terminate(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		t.Errorf("Terminate after clean exit: unexpected error: %v", err)
 	}
 }
