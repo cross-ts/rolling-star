@@ -11,36 +11,33 @@ import (
 
 // Downstream is one running language server plus the LSP connection
 // rolling-star drives it over. rolling-star is this connection's client:
-// it sends initialize/initialized/shutdown/exit and (once T6 lands)
-// forwards routed document notifications and requests to it.
+// it sends initialize/initialized/shutdown/exit and forwards routed
+// document notifications and requests to it.
 type Downstream struct {
 	Def config.ServerDef
 
 	proc Process
 	conn *jsonrpc.Conn
-	caps json.RawMessage
 
-	// handler processes requests/notifications the server sends us (the
-	// server -> client direction: publishDiagnostics, logMessage,
-	// registerCapability, workspace/configuration, custom methods, ...).
-	// Routing/forwarding that traffic to the upstream client is T6's job;
-	// it is injected here (see StartDownstream) rather than hard-coded so
-	// this file does not need to change when T6 lands. A nil handler
-	// (the T4/T5 default) replies MethodNotFound to requests and drops
-	// notifications.
-	handler jsonrpc.Handler
+	// sess is the Session this Downstream belongs to, used by Handle (see
+	// serverhandler.go) to relay server->client traffic upstream. It is
+	// set once, right after StartDownstream returns (see lifecycle.go's
+	// handleInitialize). A nil sess (the T4/T5 default, still used by
+	// tests that construct a Downstream directly) replies MethodNotFound
+	// to requests and drops notifications.
+	sess *Session
 }
 
 // StartDownstream launches def via launch (ExecLauncher if nil) and
 // establishes a jsonrpc.Conn over it, running the connection's read loop
 // in a background goroutine. It does not send initialize; call
 // Downstream.Initialize for that.
-func StartDownstream(ctx context.Context, def config.ServerDef, launch Launcher, handler jsonrpc.Handler) (*Downstream, error) {
+func StartDownstream(ctx context.Context, def config.ServerDef, launch Launcher) (*Downstream, error) {
 	if launch == nil {
 		launch = ExecLauncher
 	}
 
-	d := &Downstream{Def: def, handler: handler}
+	d := &Downstream{Def: def}
 
 	proc, err := launch(ctx, def)
 	if err != nil {
@@ -54,29 +51,8 @@ func StartDownstream(ctx context.Context, def config.ServerDef, launch Launcher,
 	return d, nil
 }
 
-// Handle implements jsonrpc.Handler by delegating to the injected
-// server->client handler, if any.
-func (d *Downstream) Handle(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
-	if d.handler != nil {
-		d.handler.Handle(ctx, c, m)
-		return
-	}
-	if m.IsRequest() {
-		_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
-			Code:    jsonrpc.CodeMethodNotFound,
-			Message: fmt.Sprintf("rolling-star: no downstream handler configured for %s", m.Method),
-		})
-	}
-	// Notifications with nowhere to go are dropped.
-}
-
 // Conn returns the underlying JSON-RPC connection to this server.
 func (d *Downstream) Conn() *jsonrpc.Conn { return d.conn }
-
-// Capabilities returns the "capabilities" object captured from this
-// server's initialize response, or nil if Initialize has not
-// successfully completed yet.
-func (d *Downstream) Capabilities() json.RawMessage { return d.caps }
 
 // Done returns a channel closed once this server's connection's read
 // loop has exited.
@@ -85,65 +61,46 @@ func (d *Downstream) Done() <-chan struct{} { return d.conn.Done() }
 // Wait blocks until the underlying process has exited.
 func (d *Downstream) Wait() error { return d.proc.Wait() }
 
-// Initialize sends an "initialize" request with the given params, waits
-// for the response, and captures its "capabilities" object (available
-// afterwards via Capabilities). It returns the full raw result on
-// success.
-func (d *Downstream) Initialize(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-	ch, err := d.conn.Call("initialize", params)
+// call sends a request and waits for its response, bounded by ctx. It
+// factors out the select this package's two blocking downstream calls
+// (Initialize, Shutdown) share.
+func (d *Downstream) call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+	ch, err := d.conn.Call(method, params)
 	if err != nil {
-		return nil, fmt.Errorf("gateway: %s: initialize: %w", d.Def.Name, err)
+		return nil, fmt.Errorf("gateway: %s: %s: %w", d.Def.Name, method, err)
 	}
 	select {
 	case msg := <-ch:
 		if msg.Error != nil {
-			return nil, fmt.Errorf("gateway: %s: initialize: %w", d.Def.Name, msg.Error)
+			return nil, fmt.Errorf("gateway: %s: %s: %w", d.Def.Name, method, msg.Error)
 		}
-		var result struct {
-			Capabilities json.RawMessage `json:"capabilities"`
-		}
-		if err := json.Unmarshal(msg.Result, &result); err != nil {
-			return nil, fmt.Errorf("gateway: %s: initialize: decode result: %w", d.Def.Name, err)
-		}
-		d.caps = result.Capabilities
 		return msg.Result, nil
 	case <-ctx.Done():
-		return nil, fmt.Errorf("gateway: %s: initialize: %w", d.Def.Name, ctx.Err())
+		return nil, fmt.Errorf("gateway: %s: %s: %w", d.Def.Name, method, ctx.Err())
 	}
 }
 
-// Initialized sends the "initialized" notification.
-func (d *Downstream) Initialized() error {
-	if err := d.conn.Notify("initialized", json.RawMessage(`{}`)); err != nil {
-		return fmt.Errorf("gateway: %s: initialized: %w", d.Def.Name, err)
+// Initialize sends an "initialize" request with the given params, waits
+// for the response, and returns its "capabilities" object.
+func (d *Downstream) Initialize(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
+	result, err := d.call(ctx, "initialize", params)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	var decoded struct {
+		Capabilities json.RawMessage `json:"capabilities"`
+	}
+	if err := json.Unmarshal(result, &decoded); err != nil {
+		return nil, fmt.Errorf("gateway: %s: initialize: decode result: %w", d.Def.Name, err)
+	}
+	return decoded.Capabilities, nil
 }
 
 // Shutdown sends a "shutdown" request and waits for its response (or for
 // ctx to be done, whichever comes first).
 func (d *Downstream) Shutdown(ctx context.Context) error {
-	ch, err := d.conn.Call("shutdown", nil)
-	if err != nil {
-		return fmt.Errorf("gateway: %s: shutdown: %w", d.Def.Name, err)
-	}
-	select {
-	case msg := <-ch:
-		if msg.Error != nil {
-			return fmt.Errorf("gateway: %s: shutdown: %w", d.Def.Name, msg.Error)
-		}
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("gateway: %s: shutdown: %w", d.Def.Name, ctx.Err())
-	}
-}
-
-// Exit sends the "exit" notification.
-func (d *Downstream) Exit() error {
-	if err := d.conn.Notify("exit", nil); err != nil {
-		return fmt.Errorf("gateway: %s: exit: %w", d.Def.Name, err)
-	}
-	return nil
+	_, err := d.call(ctx, "shutdown", nil)
+	return err
 }
 
 // Terminate force-terminates the downstream process. It is safe to call

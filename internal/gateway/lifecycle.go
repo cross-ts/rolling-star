@@ -3,15 +3,16 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/url"
+	"maps"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
+	"github.com/cross-ts/rolling-star/internal/router"
 )
 
 // shutdownTimeout bounds how long handleShutdown waits for all
@@ -79,38 +80,15 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 		}
 	}
 
-	var started []*Downstream
-	var capsList []json.RawMessage
+	// Establish downstream-facing state before any downstream can talk to
+	// us: a server that issues a request during its own "initialize" (see
+	// serverhandler.go) must see a Session whose root is already set, not
+	// one still at its zero value.
+	s.mu.Lock()
+	s.rootPath = rootPath
+	s.mu.Unlock()
 
-	for _, def := range s.cfg.Servers {
-		params, err := buildDownstreamInitParams(rawParams, def)
-		if err != nil {
-			s.log.Error("initialize: failed to build downstream params", "server", def.Name, "error", err)
-			continue
-		}
-
-		d, err := StartDownstream(ctx, def, s.launch, nil)
-		if err != nil {
-			s.log.Error("initialize: failed to start server", "server", def.Name, "error", err)
-			continue
-		}
-		// Wire the server->client direction now that d exists. Same
-		// package, so setting the unexported field directly is simplest;
-		// see downstreamHandler's doc comment for what it does.
-		d.handler = &downstreamHandler{s: s, d: d}
-
-		initCtx, initCancel := context.WithTimeout(ctx, downstreamInitializeTimeout)
-		_, err = d.Initialize(initCtx, params)
-		initCancel()
-		if err != nil {
-			s.log.Error("initialize: server failed to initialize", "server", def.Name, "error", err)
-			_ = d.Terminate()
-			continue
-		}
-
-		started = append(started, d)
-		capsList = append(capsList, d.Capabilities())
-	}
+	started, capsList := s.startServers(ctx, rawParams)
 
 	if len(started) == 0 {
 		_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
@@ -131,7 +109,6 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 	}
 
 	s.mu.Lock()
-	s.rootPath = rootPath
 	s.servers = started
 	s.mu.Unlock()
 
@@ -144,6 +121,65 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 		return
 	}
 	_ = c.Reply(*m.ID, result, nil)
+}
+
+// startServers launches and initializes every configured server
+// concurrently -- each server's own startup (process launch, then its
+// "initialize" round trip) is independent of every other server's, so
+// running them serially would make a client's "initialize" latency the
+// sum of every language server's cold-start time instead of the slowest
+// one. Results are written into pre-sized slices indexed by cfg.Servers'
+// position, then compacted: the index-preserving write is load-bearing,
+// since mergeCapabilities' first-writer-wins tie-break depends on config
+// order (see docs/v1-notes.md).
+func (s *Session) startServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []*Downstream, capsList []json.RawMessage) {
+	servers := make([]*Downstream, len(s.cfg.Servers))
+	caps := make([]json.RawMessage, len(s.cfg.Servers))
+
+	var wg sync.WaitGroup
+	for i, def := range s.cfg.Servers {
+		wg.Go(func() {
+			params, err := buildDownstreamInitParams(rawParams, def)
+			if err != nil {
+				s.log.Error("initialize: failed to build downstream params", "server", def.Name, "error", err)
+				return
+			}
+
+			d, err := StartDownstream(ctx, def, s.launch)
+			if err != nil {
+				s.log.Error("initialize: failed to start server", "server", def.Name, "error", err)
+				return
+			}
+			// Wire the server->client direction now that d exists. Same
+			// package, so setting the unexported field directly is
+			// simplest; see Downstream.Handle's doc comment for what it
+			// does.
+			d.sess = s
+
+			initCtx, initCancel := context.WithTimeout(ctx, downstreamInitializeTimeout)
+			serverCaps, err := d.Initialize(initCtx, params)
+			initCancel()
+			if err != nil {
+				s.log.Error("initialize: server failed to initialize", "server", def.Name, "error", err)
+				_ = d.Terminate()
+				return
+			}
+
+			// Each goroutine owns a distinct index, so writing here needs
+			// no lock: there is no concurrent access to the same slot.
+			servers[i] = d
+			caps[i] = serverCaps
+		})
+	}
+	wg.Wait()
+
+	for i, d := range servers {
+		if d != nil {
+			started = append(started, d)
+			capsList = append(capsList, caps[i])
+		}
+	}
+	return started, capsList
 }
 
 // deriveRootPath picks the session's root path from initialize params:
@@ -162,17 +198,17 @@ func deriveRootPath(p initializeParams) string {
 	return ""
 }
 
-// uriToPath converts a file: URI to a filesystem path, decoding percent
-// escapes via url.Parse (the same parse internal/router.PathForRouting
-// uses internally) rather than reimplementing percent-decoding. Non-file
-// URIs and unparsable input are returned unchanged, since a root path
-// value of "" would flow into a broken filepath.Rel call regardless.
+// uriToPath converts a file: URI to a filesystem path via
+// router.FilePath, the same parse internal/router.PathForRouting uses
+// internally. Non-file URIs and unparsable input are returned unchanged,
+// since a root path value of "" would flow into a broken filepath.Rel
+// call regardless.
 func uriToPath(uri string) string {
-	u, err := url.Parse(uri)
-	if err != nil || u.Scheme != "file" {
+	path, ok := router.FilePath(uri)
+	if !ok {
 		return uri
 	}
-	return u.Path
+	return path
 }
 
 // buildDownstreamInitParams derives the initialize params sent to one
@@ -183,10 +219,7 @@ func uriToPath(uri string) string {
 // through verbatim, since we forward everything the client can actually
 // do.
 func buildDownstreamInitParams(raw map[string]json.RawMessage, def config.ServerDef) (json.RawMessage, error) {
-	out := make(map[string]json.RawMessage, len(raw)+1)
-	for k, v := range raw {
-		out[k] = v
-	}
+	out := maps.Clone(raw)
 
 	pid, err := json.Marshal(os.Getpid())
 	if err != nil {
@@ -214,7 +247,7 @@ func buildDownstreamInitParams(raw map[string]json.RawMessage, def config.Server
 // handleInitialized broadcasts "initialized" to every started server.
 func (s *Session) handleInitialized() {
 	for _, d := range s.snapshotServers() {
-		if err := d.Initialized(); err != nil {
+		if err := d.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
 			s.log.Error("initialized: failed to notify server", "server", d.Def.Name, "error", err)
 		}
 	}
@@ -233,14 +266,8 @@ func (s *Session) handleShutdown(ctx context.Context, c *jsonrpc.Conn, m *jsonrp
 	s.mu.Unlock()
 
 	if m.ID != nil {
-		_ = c.Reply(*m.ID, json.RawMessage("null"), nil)
+		_ = c.Reply(*m.ID, nil, nil)
 	}
-}
-
-// handleExit sends "exit" to every server, then gives each a grace
-// period to exit on its own before force-terminating it.
-func (s *Session) handleExit() {
-	s.exitAll()
 }
 
 // shutdownAll fans a "shutdown" request out to every currently-running
@@ -263,29 +290,25 @@ func (s *Session) shutdownAll(ctx context.Context) {
 
 	var wg sync.WaitGroup
 	for _, d := range servers {
-		wg.Add(1)
-		go func(d *Downstream) {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := d.Shutdown(shutdownCtx); err != nil {
 				s.log.Error("shutdown: server failed to shut down", "server", d.Def.Name, "error", err)
 			}
-		}(d)
+		})
 	}
 	wg.Wait()
 }
 
 // exitAll sends "exit" to every currently-running server, then gives
 // each a grace period to exit on its own before force-terminating it.
-// Shared body behind handleExit and Close.
+// Shared body behind handleExit (see Session.Handle) and Close.
 func (s *Session) exitAll() {
 	servers := s.snapshotServers()
 
 	var wg sync.WaitGroup
 	for _, d := range servers {
-		wg.Add(1)
-		go func(d *Downstream) {
-			defer wg.Done()
-			if err := d.Exit(); err != nil {
+		wg.Go(func() {
+			if err := d.Conn().Notify("exit", nil); err != nil {
 				s.log.Warn("exit: failed to notify server", "server", d.Def.Name, "error", err)
 			}
 
@@ -297,25 +320,17 @@ func (s *Session) exitAll() {
 
 			select {
 			case <-waited:
+				// The common, well-behaved case: the server saw "exit"
+				// and quit on its own before the grace period elapsed.
+				// Nothing left to do -- terminating an already-exited
+				// process would just reconstruct, via the resulting
+				// errno, the same fact this select arm already knows.
 			case <-time.After(exitGracePeriod):
-			}
-			if err := d.Terminate(); err != nil {
-				// A downstream that already exited on its own (the
-				// common, well-behaved case: it saw "exit" and quit
-				// before our grace period elapsed) makes the underlying
-				// Kill return os.ErrProcessDone here. That is not a
-				// failure of anything we did, so log it at Debug rather
-				// than Warn -- a "warning" that fires on every normal
-				// shutdown just trains people to ignore warnings.
-				// Anything else (still alive and refused to die, a
-				// permissions error, ...) is still a real Warn.
-				if errors.Is(err, os.ErrProcessDone) {
-					s.log.Debug("exit: server had already exited before terminate", "server", d.Def.Name)
-				} else {
+				if err := d.Terminate(); err != nil {
 					s.log.Warn("exit: failed to terminate server", "server", d.Def.Name, "error", err)
 				}
 			}
-		}(d)
+		})
 	}
 	wg.Wait()
 }
@@ -324,8 +339,8 @@ func (s *Session) exitAll() {
 // then "exit" then (after a grace period) a forced kill for any that
 // haven't exited on their own, exactly like the protocol-driven path but
 // without an upstream request/notification to answer. It is meant for
-// out-of-band teardown -- T7's main wiring calls this on SIGINT/SIGTERM
-// so an interrupted rolling-star doesn't leave orphaned child language
+// out-of-band teardown -- main's wiring calls this on SIGINT/SIGTERM so
+// an interrupted rolling-star doesn't leave orphaned child language
 // server processes behind. Calling Close after the session has already
 // shut down via the normal protocol path is safe: shutdownAll/exitAll
 // simply iterate an empty server list at that point.
@@ -339,7 +354,5 @@ func (s *Session) Close(ctx context.Context) {
 func (s *Session) snapshotServers() []*Downstream {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]*Downstream, len(s.servers))
-	copy(out, s.servers)
-	return out
+	return slices.Clone(s.servers)
 }

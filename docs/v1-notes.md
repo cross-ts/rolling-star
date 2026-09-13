@@ -43,7 +43,7 @@ There is no default/fallback server for a document that no selector matches (`in
 
 ## The `serverHandlers` hook point
 
-`Session.serverHandlers` (`map[string]ServerRequestHandler`, declared in `session.go`) is always empty in v1 — nothing ever registers into it. It exists purely as the one structural concession to deferred work: `downstreamHandler.Handle` (`internal/gateway/serverhandler.go`) checks this map before forwarding a downstream request upstream, and if an entry is ever added, that request is answered locally by the handler instead of being forwarded — without changing anything else in the forwarding loop.
+`Session.serverHandlers` (`map[string]ServerRequestHandler`, declared in `session.go`) is always empty in v1 — nothing ever registers into it. It exists purely as the one structural concession to deferred work: `Downstream.Handle` (`internal/gateway/serverhandler.go`) checks this map before forwarding a downstream request upstream, and if an entry is ever added, that request is answered locally by the handler instead of being forwarded — without changing anything else in the forwarding loop.
 
 This is where the deferred v1-out-of-scope work plugs in later, per `docs/init.md` §3:
 - `actions/readFile` (server → client custom request `actions-languageserver` uses to resolve local reusable workflows)
@@ -60,6 +60,6 @@ None of that is implemented; only the hook point is.
 
 **Why this isn't the fix:** the correct fix is still answering such requests locally via `serverHandlers` instead of forwarding — the same deferred hook point described above — rather than adding special-casing to the core forwarding loop. The timeout only bounds the damage; it doesn't make the request work. Spec-conformant downstream servers do not send requests before their own `initialize` response, so this only bites against a non-conformant peer.
 
-## `Downstream.Terminate` and `os.ErrProcessDone`
+## `Downstream.Terminate` only on a timed-out exit
 
-`Session`'s exit sequence (`exitAll` in `lifecycle.go`) sends `exit`, waits a grace period for the process to exit on its own, then always calls `Terminate()` regardless of whether the wait already succeeded. For a well-behaved downstream (the common case: it saw `exit` and quit promptly), `Terminate()`'s underlying `Process.Kill()` then returns `os.ErrProcessDone`, which is logged at `Debug`, not `Warn` — the process already being gone is the expected outcome of a clean exit, not a failure worth flagging in normal operation. Any other `Terminate()` error (still alive and unkillable, permissions, ...) still logs at `Warn`.
+`Session`'s exit sequence (`exitAll` in `lifecycle.go`) sends `exit`, then selects on the process exiting on its own vs. a grace period elapsing. `Terminate()` is only called on the grace-period arm: a well-behaved downstream (the common case: it saw `exit` and quit promptly) needs nothing further once its own exit is observed, so there is no `Terminate()` call, and thus no `os.ErrProcessDone` to filter out of the logs on that path. Only a downstream that is still alive when the grace period elapses gets `Terminate()`'d, and any error from that call is a genuine `Warn`.

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -18,14 +19,9 @@ import (
 // somewhere sane to land.
 type testEditor struct {
 	mu             sync.Mutex
-	diagnostics    []testEditorDiagnostic
+	diagnostics    []received
 	configResult   json.RawMessage
 	configRequests []json.RawMessage
-}
-
-type testEditorDiagnostic struct {
-	Method string
-	Params json.RawMessage
 }
 
 func newTestEditor() *testEditor {
@@ -36,7 +32,7 @@ func (e *testEditor) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Messa
 	switch m.Method {
 	case "textDocument/publishDiagnostics":
 		e.mu.Lock()
-		e.diagnostics = append(e.diagnostics, testEditorDiagnostic{Method: m.Method, Params: m.Params})
+		e.diagnostics = append(e.diagnostics, received{Method: m.Method, Params: m.Params})
 		e.mu.Unlock()
 	case "workspace/configuration":
 		e.mu.Lock()
@@ -53,12 +49,10 @@ func (e *testEditor) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Messa
 	}
 }
 
-func (e *testEditor) Diagnostics() []testEditorDiagnostic {
+func (e *testEditor) Diagnostics() []received {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := make([]testEditorDiagnostic, len(e.diagnostics))
-	copy(out, e.diagnostics)
-	return out
+	return slices.Clone(e.diagnostics)
 }
 
 // setupRoutedSession starts a Session with the two-server config
@@ -124,32 +118,55 @@ func didOpenParams(uri, languageID, text string) json.RawMessage {
 	return b
 }
 
-// waitForReceipt polls fake.Received() until it has seen method, or
-// fails the test after a short deadline. Forwarding a notification
-// completes asynchronously with respect to the test goroutine (it's
-// inline in the gateway's read loop, not the test's), so this avoids a
-// flaky fixed sleep.
-func waitForReceipt(t *testing.T, fake *fakeServer, method string) {
+// positionParams builds a {"textDocument":{"uri":...},"position":{...}}
+// params object, the shape shared by hover, definition, and the other
+// position-addressed requests these tests exercise.
+func positionParams(uri string) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     map[string]any{"line": 0, "character": 0},
+	})
+	return b
+}
+
+// openWorkflowDoc sends a didOpen for the standard
+// .github/workflows/ci.yml document used across the routing tests, waits
+// for actionsFake to receive it, and returns the document's uri.
+func openWorkflowDoc(t *testing.T, client *jsonrpc.Conn, actionsFake *fakeServer) string {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	uri := "file:///repo/.github/workflows/ci.yml"
+	if err := client.Notify("textDocument/didOpen", didOpenParams(uri, "yaml", "name: CI\n")); err != nil {
+		t.Fatalf("notify didOpen: %v", err)
+	}
+	waitForReceipt(t, actionsFake, "textDocument/didOpen")
+	return uri
+}
+
+// waitFor polls cond until it reports true, or fails the test with msg
+// after a generous deadline. Used for asserting on state produced
+// asynchronously with respect to the test goroutine (forwarding runs
+// inline in the gateway's own read loop, not the test's), so this avoids
+// flaky fixed sleeps.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(6 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, r := range fake.Received() {
-			if r.Method == method {
-				return
-			}
+		if cond() {
+			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", method)
+	t.Fatal(msg)
+}
+
+// waitForReceipt waits until fake has received method.
+func waitForReceipt(t *testing.T, fake *fakeServer, method string) {
+	t.Helper()
+	waitFor(t, func() bool { return hasMethod(fake, method) }, "timed out waiting for "+method)
 }
 
 func hasMethod(fake *fakeServer, method string) bool {
-	for _, r := range fake.Received() {
-		if r.Method == method {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(fake.Received(), func(r received) bool { return r.Method == method })
 }
 
 func TestRouting_DidOpen_WorkflowGoesToActionsOnly(t *testing.T) {
@@ -182,18 +199,9 @@ func TestRouting_DidOpen_PlainYAMLGoesToYAMLOnly(t *testing.T) {
 
 func TestRouting_HoverAfterDidOpen(t *testing.T) {
 	client, _, actionsFake, _ := setupRoutedSession(t)
+	uri := openWorkflowDoc(t, client, actionsFake)
 
-	uri := "file:///repo/.github/workflows/ci.yml"
-	if err := client.Notify("textDocument/didOpen", didOpenParams(uri, "yaml", "name: CI\n")); err != nil {
-		t.Fatalf("notify didOpen: %v", err)
-	}
-	waitForReceipt(t, actionsFake, "textDocument/didOpen")
-
-	hoverParams, _ := json.Marshal(map[string]any{
-		"textDocument": map[string]any{"uri": uri},
-		"position":     map[string]any{"line": 0, "character": 0},
-	})
-	resp := mustCall(t, client, "textDocument/hover", hoverParams)
+	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
 	if resp.Error != nil {
 		t.Fatalf("hover: unexpected error: %v", resp.Error)
 	}
@@ -207,12 +215,7 @@ func TestRouting_HoverAfterDidOpen(t *testing.T) {
 
 func TestRouting_DidCloseUnbinds(t *testing.T) {
 	client, _, actionsFake, _ := setupRoutedSession(t)
-
-	uri := "file:///repo/.github/workflows/ci.yml"
-	if err := client.Notify("textDocument/didOpen", didOpenParams(uri, "yaml", "name: CI\n")); err != nil {
-		t.Fatalf("notify didOpen: %v", err)
-	}
-	waitForReceipt(t, actionsFake, "textDocument/didOpen")
+	uri := openWorkflowDoc(t, client, actionsFake)
 
 	closeParams, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": uri}})
 	if err := client.Notify("textDocument/didClose", closeParams); err != nil {
@@ -228,11 +231,7 @@ func TestRouting_DidCloseUnbinds(t *testing.T) {
 	// result; instead the on-the-fly re-route with languageID=="" fails
 	// to match, and the request gets a null result (unroutable-document
 	// policy), not the fake's hover response.
-	hoverParams, _ := json.Marshal(map[string]any{
-		"textDocument": map[string]any{"uri": uri},
-		"position":     map[string]any{"line": 0, "character": 0},
-	})
-	resp := mustCall(t, client, "textDocument/hover", hoverParams)
+	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
 	if resp.Error != nil {
 		t.Fatalf("hover after didClose: unexpected error: %v", resp.Error)
 	}
@@ -250,11 +249,7 @@ func TestRouting_RequestBeforeDidOpenRoutesOnTheFly(t *testing.T) {
 	client, _, actionsFake, _ := setupRoutedSessionWithConfig(t, patternOnlyConfig())
 
 	uri := "file:///repo/.github/workflows/ci.yml"
-	hoverParams, _ := json.Marshal(map[string]any{
-		"textDocument": map[string]any{"uri": uri},
-		"position":     map[string]any{"line": 0, "character": 0},
-	})
-	resp := mustCall(t, client, "textDocument/hover", hoverParams)
+	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
 	if resp.Error != nil {
 		t.Fatalf("hover: unexpected error: %v", resp.Error)
 	}
@@ -285,11 +280,7 @@ func TestRouting_UnroutableDocumentIsDroppedSilently(t *testing.T) {
 	// MethodNotFound (the merged capabilities say the method exists, and
 	// it does work for routable documents), not an error, just "no
 	// answer for this document".
-	hoverParams, _ := json.Marshal(map[string]any{
-		"textDocument": map[string]any{"uri": uri},
-		"position":     map[string]any{"line": 0, "character": 0},
-	})
-	resp := mustCall(t, client, "textDocument/hover", hoverParams)
+	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
 	if resp.Error != nil {
 		t.Fatalf("hover on unroutable document: unexpected error: %v", resp.Error)
 	}
@@ -300,22 +291,14 @@ func TestRouting_UnroutableDocumentIsDroppedSilently(t *testing.T) {
 
 func TestRouting_PublishDiagnosticsReachesClient(t *testing.T) {
 	client, editor, actionsFake, _ := setupRoutedSession(t)
-
-	uri := "file:///repo/.github/workflows/ci.yml"
-	if err := client.Notify("textDocument/didOpen", didOpenParams(uri, "yaml", "name: CI\n")); err != nil {
-		t.Fatalf("notify didOpen: %v", err)
-	}
-	waitForReceipt(t, actionsFake, "textDocument/didOpen")
+	uri := openWorkflowDoc(t, client, actionsFake)
 
 	diags, _ := json.Marshal([]map[string]any{{"message": "boom", "severity": 1}})
 	if err := actionsFake.PushDiagnostics(uri, diags); err != nil {
 		t.Fatalf("PushDiagnostics: %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && len(editor.Diagnostics()) == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitFor(t, func() bool { return len(editor.Diagnostics()) > 0 }, "timed out waiting for diagnostics")
 	got := editor.Diagnostics()
 	if len(got) != 1 {
 		t.Fatalf("editor received %d diagnostics notifications, want 1", len(got))
@@ -324,12 +307,7 @@ func TestRouting_PublishDiagnosticsReachesClient(t *testing.T) {
 
 func TestRouting_DownstreamRequestIDIsRemapped(t *testing.T) {
 	client, editor, actionsFake, _ := setupRoutedSession(t)
-
-	uri := "file:///repo/.github/workflows/ci.yml"
-	if err := client.Notify("textDocument/didOpen", didOpenParams(uri, "yaml", "name: CI\n")); err != nil {
-		t.Fatalf("notify didOpen: %v", err)
-	}
-	waitForReceipt(t, actionsFake, "textDocument/didOpen")
+	openWorkflowDoc(t, client, actionsFake)
 
 	items, _ := json.Marshal([]map[string]any{{"section": "yaml"}})
 	ch, err := actionsFake.AskConfiguration(items)
@@ -362,22 +340,13 @@ func TestRouting_DownstreamRequestIDIsRemapped(t *testing.T) {
 
 func TestRouting_DownstreamErrorPropagatesUpstream(t *testing.T) {
 	client, _, actionsFake, _ := setupRoutedSession(t)
-
-	uri := "file:///repo/.github/workflows/ci.yml"
-	if err := client.Notify("textDocument/didOpen", didOpenParams(uri, "yaml", "name: CI\n")); err != nil {
-		t.Fatalf("notify didOpen: %v", err)
-	}
-	waitForReceipt(t, actionsFake, "textDocument/didOpen")
+	uri := openWorkflowDoc(t, client, actionsFake)
 
 	// The fake replies MethodNotFound to anything it doesn't specifically
 	// implement; textDocument/definition is one such method, so it
 	// exercises the downstream-error round trip without adding new fake
 	// behavior.
-	params, _ := json.Marshal(map[string]any{
-		"textDocument": map[string]any{"uri": uri},
-		"position":     map[string]any{"line": 0, "character": 0},
-	})
-	resp := mustCall(t, client, "textDocument/definition", params)
+	resp := mustCall(t, client, "textDocument/definition", positionParams(uri))
 	if resp.Error == nil {
 		t.Fatal("expected an error response, got success")
 	}
@@ -391,12 +360,7 @@ func TestRouting_DownstreamErrorPropagatesUpstream(t *testing.T) {
 
 func TestRouting_NotificationOrderingPreserved(t *testing.T) {
 	client, _, actionsFake, _ := setupRoutedSession(t)
-
-	uri := "file:///repo/.github/workflows/ci.yml"
-	if err := client.Notify("textDocument/didOpen", didOpenParams(uri, "yaml", "name: CI\n")); err != nil {
-		t.Fatalf("notify didOpen: %v", err)
-	}
-	waitForReceipt(t, actionsFake, "textDocument/didOpen")
+	uri := openWorkflowDoc(t, client, actionsFake)
 
 	changeParams, _ := json.Marshal(map[string]any{
 		"textDocument":   map[string]any{"uri": uri, "version": 2},
@@ -406,28 +370,12 @@ func TestRouting_NotificationOrderingPreserved(t *testing.T) {
 		t.Fatalf("notify didChange: %v", err)
 	}
 
-	hoverParams, _ := json.Marshal(map[string]any{
-		"textDocument": map[string]any{"uri": uri},
-		"position":     map[string]any{"line": 0, "character": 0},
-	})
-	resp := mustCall(t, client, "textDocument/hover", hoverParams)
+	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
 	if resp.Error != nil {
 		t.Fatalf("hover: %v", resp.Error)
 	}
 
-	var methods []string
-	for _, r := range actionsFake.Received() {
-		methods = append(methods, r.Method)
-	}
-	want := []string{"initialize", "initialized", "textDocument/didOpen", "textDocument/didChange", "textDocument/hover"}
-	if len(methods) != len(want) {
-		t.Fatalf("actionsFake received %v, want %v", methods, want)
-	}
-	for i := range want {
-		if methods[i] != want[i] {
-			t.Errorf("received[%d] = %q, want %q (ordering not preserved)", i, methods[i], want[i])
-		}
-	}
+	assertMethods(t, actionsFake, "initialize", "initialized", "textDocument/didOpen", "textDocument/didChange", "textDocument/hover")
 }
 
 func TestRouting_CancelRequestIsDropped(t *testing.T) {

@@ -301,28 +301,18 @@ func TestSession_InitializedShutdownExit(t *testing.T) {
 
 	// Wait for exit's fan-out (send exit, grace period, terminate) to
 	// finish on both fakes; termination tears down their connections.
-	deadline := time.After(exitGracePeriod + 3*time.Second)
 	for _, fake := range byName {
-		select {
-		case <-fake.conn.Done():
-		case <-deadline:
-			t.Fatal("timed out waiting for downstream connection to close after exit")
-		}
+		waitFor(t, func() bool {
+			select {
+			case <-fake.conn.Done():
+				return true
+			default:
+				return false
+			}
+		}, "timed out waiting for downstream connection to close after exit")
 	}
 
-	for name, fake := range byName {
-		var methods []string
-		for _, r := range fake.Received() {
-			methods = append(methods, r.Method)
-		}
-		want := []string{"initialize", "initialized", "shutdown", "exit"}
-		if len(methods) != len(want) {
-			t.Fatalf("%s: received %v, want %v", name, methods, want)
-		}
-		for i := range want {
-			if methods[i] != want[i] {
-				t.Errorf("%s: received[%d] = %q, want %q", name, i, methods[i], want[i])
-			}
-		}
+	for _, fake := range byName {
+		assertMethods(t, fake, "initialize", "initialized", "shutdown", "exit")
 	}
 }

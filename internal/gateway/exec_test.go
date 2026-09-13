@@ -40,7 +40,7 @@ func (execFakeHandler) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Mes
 		})
 		_ = c.Reply(*m.ID, result, nil)
 	case "shutdown":
-		_ = c.Reply(*m.ID, json.RawMessage("null"), nil)
+		_ = c.Reply(*m.ID, nil, nil)
 	case "exit":
 		os.Exit(0)
 	}
@@ -76,20 +76,21 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	d, err := StartDownstream(ctx, def, nil, nil) // nil launcher -> ExecLauncher
+	d, err := StartDownstream(ctx, def, nil) // nil launcher -> ExecLauncher
 	if err != nil {
 		t.Fatalf("StartDownstream: %v", err)
 	}
 
-	if _, err := d.Initialize(ctx, json.RawMessage(`{}`)); err != nil {
+	caps, err := d.Initialize(ctx, json.RawMessage(`{}`))
+	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
-	if string(d.Capabilities()) != `{"hoverProvider":true}` {
-		t.Errorf("Capabilities() = %s, want {\"hoverProvider\":true}", d.Capabilities())
+	if string(caps) != `{"hoverProvider":true}` {
+		t.Errorf("Initialize capabilities = %s, want {\"hoverProvider\":true}", caps)
 	}
 
-	if err := d.Initialized(); err != nil {
-		t.Fatalf("Initialized: %v", err)
+	if err := d.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Notify initialized: %v", err)
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -98,8 +99,8 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	if err := d.Exit(); err != nil {
-		t.Fatalf("Exit: %v", err)
+	if err := d.Conn().Notify("exit", nil); err != nil {
+		t.Fatalf("Notify exit: %v", err)
 	}
 
 	// The child exits voluntarily on "exit"; wait for the real process

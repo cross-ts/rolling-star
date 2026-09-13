@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"slices"
 	"sync"
+	"testing"
 
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
@@ -66,7 +68,7 @@ func (f *fakeServer) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Messa
 		result, _ := json.Marshal(map[string]json.RawMessage{"capabilities": f.caps})
 		_ = c.Reply(*m.ID, result, nil)
 	case "shutdown":
-		_ = c.Reply(*m.ID, json.RawMessage("null"), nil)
+		_ = c.Reply(*m.ID, nil, nil)
 	case "textDocument/hover":
 		_ = c.Reply(*m.ID, f.hoverResult, nil)
 	case "initialized", "exit":
@@ -86,9 +88,28 @@ func (f *fakeServer) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Messa
 func (f *fakeServer) Received() []received {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]received, len(f.receipts))
-	copy(out, f.receipts)
+	return slices.Clone(f.receipts)
+}
+
+// methods returns just the method names of everything this fake has
+// received so far, in receipt order.
+func (f *fakeServer) methods() []string {
+	recv := f.Received()
+	out := make([]string, len(recv))
+	for i, r := range recv {
+		out[i] = r.Method
+	}
 	return out
+}
+
+// assertMethods fails the test unless fake received exactly want, in
+// order.
+func assertMethods(t *testing.T, fake *fakeServer, want ...string) {
+	t.Helper()
+	got := fake.methods()
+	if !slices.Equal(got, want) {
+		t.Fatalf("received %v, want %v", got, want)
+	}
 }
 
 // PushDiagnostics sends a textDocument/publishDiagnostics notification

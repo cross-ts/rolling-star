@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
@@ -54,9 +55,8 @@ var broadcastMethods = map[string]bool{
 // to that document's URI, and the handful of document-context-less cases
 // from §4.4 are handled explicitly. It is invoked synchronously from the
 // upstream Conn's read loop, so message ordering as sent by the client is
-// preserved end to end (see forwardNotification/forwardRequest below for
-// how that invariant survives being combined with request/response
-// correlation).
+// preserved end to end (see relay below for how that invariant survives
+// being combined with request/response correlation).
 func (s *Session) route(c *jsonrpc.Conn, m *jsonrpc.Message) {
 	switch m.Method {
 	case "textDocument/didOpen":
@@ -124,7 +124,9 @@ func (s *Session) handleDidOpen(m *jsonrpc.Message) {
 	}
 
 	d := s.routeAndBind(p.TextDocument.URI, p.TextDocument.LanguageID, true)
-	s.forwardNotification(d, m)
+	if d != nil {
+		s.relay(s.upstream, d.Conn(), m, d.Def.Name)
+	}
 }
 
 // handleDidClose forwards the notification to whatever server the
@@ -138,7 +140,9 @@ func (s *Session) handleDidClose(m *jsonrpc.Message) {
 	}
 
 	d, _ := s.lookupBinding(uri)
-	s.forwardNotification(d, m)
+	if d != nil {
+		s.relay(s.upstream, d.Conn(), m, d.Def.Name)
+	}
 
 	s.mu.Lock()
 	delete(s.docs, uri)
@@ -171,11 +175,11 @@ func (s *Session) handleDocumentMessage(c *jsonrpc.Conn, m *jsonrpc.Message, uri
 	}
 	if d == nil {
 		if m.IsRequest() {
-			_ = c.Reply(*m.ID, json.RawMessage("null"), nil)
+			_ = c.Reply(*m.ID, nil, nil)
 		}
 		return
 	}
-	s.forward(c, m, d)
+	s.relay(c, d.Conn(), m, d.Def.Name)
 }
 
 // routeAndBind computes the routing path for uri under the session's
@@ -190,20 +194,13 @@ func (s *Session) routeAndBind(uri, languageID string, warnOnMiss bool) *Downstr
 	s.mu.Unlock()
 
 	path := router.PathForRouting(rootPath, uri)
-	serverName, ok := s.router.Route(languageID, path)
+	serverName, matched := s.router.Route(languageID, path)
 
 	var d *Downstream
-	if ok {
-		for _, cand := range servers {
-			if cand.Def.Name == serverName {
-				d = cand
-				break
-			}
+	if matched {
+		if i := slices.IndexFunc(servers, func(cand *Downstream) bool { return cand.Def.Name == serverName }); i >= 0 {
+			d = servers[i]
 		}
-		// A rule can name a server that isn't currently running (it
-		// failed to start/initialize and was dropped in T5's
-		// handleInitialize); treat that the same as no match.
-		ok = ok && d != nil
 	}
 
 	s.mu.Lock()
@@ -211,9 +208,16 @@ func (s *Session) routeAndBind(uri, languageID string, warnOnMiss bool) *Downstr
 	s.mu.Unlock()
 
 	switch {
-	case ok:
+	case d != nil:
 		s.log.Info("routed document to downstream server",
 			"uri", uri, "languageId", languageID, "path", path, "server", d.Def.Name)
+	case matched && warnOnMiss:
+		// A rule matched, but the server it named isn't currently
+		// running (it failed to start/initialize and was dropped in
+		// handleInitialize) -- distinct from no rule matching at all,
+		// since this points at a startup failure, not a routing gap.
+		s.log.Warn("document matched a routing rule, but its server is not running; further messages for it will be dropped",
+			"uri", uri, "languageId", languageID, "path", path, "server", serverName)
 	case warnOnMiss:
 		s.log.Warn("no downstream server matched document; further messages for it will be dropped",
 			"uri", uri, "languageId", languageID, "path", path)
@@ -240,53 +244,43 @@ func (s *Session) broadcastNotification(m *jsonrpc.Message) {
 	}
 }
 
-// forward sends m to d, as a notification or a request depending on m's
-// own shape.
-func (s *Session) forward(c *jsonrpc.Conn, m *jsonrpc.Message, d *Downstream) {
-	if m.IsRequest() {
-		s.forwardRequest(c, m, d)
-		return
-	}
-	s.forwardNotification(d, m)
-}
-
-// forwardNotification relays m to d inline, from the read loop, so
-// ordering relative to other forwarded traffic is exactly what the
-// client sent. d may be nil (an unroutable document), in which case this
-// is a no-op.
-func (s *Session) forwardNotification(d *Downstream, m *jsonrpc.Message) {
-	if d == nil {
-		return
-	}
-	if err := d.Conn().Notify(m.Method, m.Params); err != nil {
-		s.log.Error("forward notification failed", "server", d.Def.Name, "method", m.Method, "error", err)
-	}
-}
-
-// forwardRequest relays a client request to d. The send itself
-// (conn.Call) happens inline, from the read loop, so it is ordered
-// exactly like forwardNotification with respect to other traffic sent to
-// d; only waiting for the response is handed to a goroutine, so the
-// upstream read loop is never blocked on a downstream's answer.
+// relay forwards m, received on from, to the peer connection to, in
+// whichever of the two directions the caller needs -- client->server
+// (from == s.upstream, to == some Downstream's Conn) or server->client
+// (from == some Downstream's Conn, to == s.upstream). peer names the "to"
+// side, for logging/error text only.
 //
-// The upstream request id is captured by the goroutine's closure; d's
-// Conn.Call allocates its own fresh id for the downstream leg. That pair
-// of ids is the entire "remap": no separate id table is kept. The
-// downstream's error object (code/message/data) is copied verbatim into
-// the upstream reply so it round-trips exactly.
-func (s *Session) forwardRequest(c *jsonrpc.Conn, m *jsonrpc.Message, d *Downstream) {
-	ch, err := d.Conn().Call(m.Method, m.Params)
+// A notification is sent to `to` inline, from the caller's read loop, so
+// its ordering relative to other relayed traffic exactly matches what the
+// sender emitted. A request's send is also inline for the same reason;
+// only waiting for its response is handed to a goroutine, so `from`'s
+// read loop is never blocked on `to`'s answer.
+//
+// The original request's id is captured by that goroutine's closure; to's
+// Conn.Call allocates its own fresh id for the outgoing leg. That id pair
+// is the entire "remap": no separate id table is kept anywhere. The
+// response's error object (code/message/data) is copied verbatim into the
+// reply on `from` so it round-trips exactly.
+func (s *Session) relay(from, to *jsonrpc.Conn, m *jsonrpc.Message, peer string) {
+	if !m.IsRequest() {
+		if err := to.Notify(m.Method, m.Params); err != nil {
+			s.log.Error("relay notification failed", "peer", peer, "method", m.Method, "error", err)
+		}
+		return
+	}
+
+	ch, err := to.Call(m.Method, m.Params)
 	if err != nil {
-		_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
+		_ = from.Reply(*m.ID, nil, &jsonrpc.Error{
 			Code:    jsonrpc.CodeInternalError,
-			Message: fmt.Sprintf("rolling-star: failed to forward %s to %s: %v", m.Method, d.Def.Name, err),
+			Message: fmt.Sprintf("rolling-star: failed to forward %s to %s: %v", m.Method, peer, err),
 		})
 		return
 	}
 
-	upstreamID := *m.ID
+	id := *m.ID
 	go func() {
 		msg := <-ch
-		_ = c.Reply(upstreamID, msg.Result, msg.Error)
+		_ = from.Reply(id, msg.Result, msg.Error)
 	}()
 }

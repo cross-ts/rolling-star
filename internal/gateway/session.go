@@ -127,7 +127,7 @@ func (s *Session) Handle(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Messag
 	case "shutdown":
 		s.handleShutdown(ctx, c, m)
 	case "exit":
-		s.handleExit()
+		s.exitAll()
 	default:
 		// Document routing and forwarding (client->server), and the §4.4
 		// policy table for document-context-less messages. See routing.go.
