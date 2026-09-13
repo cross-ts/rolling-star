@@ -11,14 +11,10 @@ import (
 	"time"
 )
 
-// recordingHandler records every notification/request it receives, in
-// order, and can be configured to auto-reply to requests.
 type recordingHandler struct {
 	mu       sync.Mutex
 	received []*Message
 
-	// reply, if non-nil, is invoked for every request to compute a
-	// result to send back via c.Reply.
 	reply func(m *Message) (json.RawMessage, *Error)
 }
 
@@ -46,9 +42,6 @@ func withTimeout(t *testing.T) context.Context {
 	return ctx
 }
 
-// newPipeConns creates a connected pair of Conns over an in-memory pipe
-// and starts both read loops (under a shared timeout context), since
-// every caller needs exactly that.
 func newPipeConns(t *testing.T, serverHandler, clientHandler Handler) (server, client *Conn, ctx context.Context) {
 	t.Helper()
 	a, b := net.Pipe()
@@ -95,8 +88,7 @@ func TestConnCallAndReply(t *testing.T) {
 func TestConnConcurrentCallsGetDistinctIDsAndCorrectResponses(t *testing.T) {
 	serverH := &recordingHandler{
 		reply: func(m *Message) (json.RawMessage, *Error) {
-			// Echo the params back as the result so we can verify
-			// correlation, not just "a" response arrived.
+
 			return m.Params, nil
 		},
 	}
@@ -134,10 +126,6 @@ func TestConnNotificationOrderingPreservedRelativeToCalls(t *testing.T) {
 	}
 	_, client, ctx := newPipeConns(t, serverH, nil)
 
-	// Send didOpen (notification), then hover (call), from the same
-	// goroutine: order on the wire must be preserved, and the handler
-	// (a stand-in for Session.Handle) must see them in that order since
-	// Run dispatches synchronously.
 	if err := client.Notify("textDocument/didOpen", json.RawMessage(`{"doc":"a"}`)); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
@@ -203,7 +191,7 @@ func TestConnErrorResponseRoundTrip(t *testing.T) {
 func TestConnReplyNullResultOverWire(t *testing.T) {
 	serverH := &recordingHandler{
 		reply: func(m *Message) (json.RawMessage, *Error) {
-			return nil, nil // nil result, no error: should become "result": null
+			return nil, nil
 		},
 	}
 	_, client, ctx := newPipeConns(t, serverH, nil)
@@ -230,11 +218,7 @@ func TestConnReplyNullResultOverWire(t *testing.T) {
 }
 
 func TestConnPendingCallsReleasedWhenPeerCloses(t *testing.T) {
-	// client.Run must be running so that server's Call (a blocking
-	// net.Pipe write) actually completes; client's read loop just
-	// discards the request since it has no handler configured. We then
-	// close the client to simulate the peer going away and verify the
-	// server's still-pending call gets released rather than hanging.
+
 	server, client, ctx := newPipeConns(t, nil, nil)
 
 	ch, err := server.Call("willNeverReply", nil)
@@ -242,8 +226,6 @@ func TestConnPendingCallsReleasedWhenPeerCloses(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 
-	// Closing the client's end of the pipe causes the server's read loop
-	// to see an error/EOF, which must release pending calls.
 	if err := client.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

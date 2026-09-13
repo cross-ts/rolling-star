@@ -12,11 +12,6 @@ import (
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 )
 
-// testEditor is a client-side jsonrpc.Handler that plays the role of the
-// upstream editor for T6 tests: it records diagnostics pushed to it and
-// answers workspace/configuration (and any other request) with a canned
-// result, so downstream-initiated requests forwarded upstream have
-// somewhere sane to land.
 type testEditor struct {
 	mu             sync.Mutex
 	diagnostics    []received
@@ -55,10 +50,6 @@ func (e *testEditor) Diagnostics() []received {
 	return slices.Clone(e.diagnostics)
 }
 
-// setupRoutedSession starts a Session with the two-server config
-// (actions for .github/workflows/**/*.yml, yaml for any other yaml) and
-// completes initialize/initialized against rootUri file:///repo, so
-// routing tests can go straight to sending document notifications.
 func setupRoutedSession(t *testing.T) (client *jsonrpc.Conn, editor *testEditor, actionsFake, yamlFake *fakeServer) {
 	t.Helper()
 	return setupRoutedSessionWithConfig(t, twoServerConfig())
@@ -84,10 +75,6 @@ func setupRoutedSessionWithConfig(t *testing.T, cfg *config.Config) (client *jso
 	return client, editor, actionsFake, yamlFake
 }
 
-// patternOnlyConfig is like twoServerConfig but its selectors match on
-// path alone (no languageId requirement), so it can demonstrate
-// on-the-fly routing for a request whose languageId is unknown (i.e. no
-// preceding didOpen).
 func patternOnlyConfig() *config.Config {
 	return &config.Config{
 		Servers: []config.ServerDef{
@@ -118,9 +105,6 @@ func didOpenParams(uri, languageID, text string) json.RawMessage {
 	return b
 }
 
-// positionParams builds a {"textDocument":{"uri":...},"position":{...}}
-// params object, the shape shared by hover, definition, and the other
-// position-addressed requests these tests exercise.
 func positionParams(uri string) json.RawMessage {
 	b, _ := json.Marshal(map[string]any{
 		"textDocument": map[string]any{"uri": uri},
@@ -129,9 +113,6 @@ func positionParams(uri string) json.RawMessage {
 	return b
 }
 
-// openWorkflowDoc sends a didOpen for the standard
-// .github/workflows/ci.yml document used across the routing tests, waits
-// for actionsFake to receive it, and returns the document's uri.
 func openWorkflowDoc(t *testing.T, client *jsonrpc.Conn, actionsFake *fakeServer) string {
 	t.Helper()
 	uri := "file:///repo/.github/workflows/ci.yml"
@@ -142,11 +123,6 @@ func openWorkflowDoc(t *testing.T, client *jsonrpc.Conn, actionsFake *fakeServer
 	return uri
 }
 
-// waitFor polls cond until it reports true, or fails the test with msg
-// after a generous deadline. Used for asserting on state produced
-// asynchronously with respect to the test goroutine (forwarding runs
-// inline in the gateway's own read loop, not the test's), so this avoids
-// flaky fixed sleeps.
 func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(6 * time.Second)
@@ -159,7 +135,6 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Fatal(msg)
 }
 
-// waitForReceipt waits until fake has received method.
 func waitForReceipt(t *testing.T, fake *fakeServer, method string) {
 	t.Helper()
 	waitFor(t, func() bool { return hasMethod(fake, method) }, "timed out waiting for "+method)
@@ -223,14 +198,6 @@ func TestRouting_DidCloseUnbinds(t *testing.T) {
 	}
 	waitForReceipt(t, actionsFake, "textDocument/didClose")
 
-	// After didClose, the binding is gone. Proving that without reaching
-	// into the unexported docs map: twoServerConfig's selectors both
-	// require language==yaml, and this hover carries no languageId (no
-	// preceding didOpen since the close), so if the old binding were
-	// still cached the hover would succeed with the fake's canned
-	// result; instead the on-the-fly re-route with languageID=="" fails
-	// to match, and the request gets a null result (unroutable-document
-	// policy), not the fake's hover response.
 	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
 	if resp.Error != nil {
 		t.Fatalf("hover after didClose: unexpected error: %v", resp.Error)
@@ -241,11 +208,7 @@ func TestRouting_DidCloseUnbinds(t *testing.T) {
 }
 
 func TestRouting_RequestBeforeDidOpenRoutesOnTheFly(t *testing.T) {
-	// Uses patternOnlyConfig, whose selectors match on path alone: with
-	// twoServerConfig's language==yaml selectors, a request with no
-	// preceding didOpen (languageID=="") could never match anything, which
-	// would exercise the "unroutable" path instead of "on-the-fly routing
-	// succeeded" (see TestRouting_DidCloseUnbinds for that path).
+
 	client, _, actionsFake, _ := setupRoutedSessionWithConfig(t, patternOnlyConfig())
 
 	uri := "file:///repo/.github/workflows/ci.yml"
@@ -266,20 +229,11 @@ func TestRouting_UnroutableDocumentIsDroppedSilently(t *testing.T) {
 		t.Fatalf("notify didOpen: %v", err)
 	}
 
-	// Give the (nonexistent) forward a moment to definitely not arrive,
-	// then confirm neither fake ever saw it.
 	time.Sleep(100 * time.Millisecond)
 	if hasMethod(actionsFake, "textDocument/didOpen") || hasMethod(yamlFake, "textDocument/didOpen") {
 		t.Fatal("unroutable document's didOpen reached a downstream server")
 	}
 
-	// A later *request* for the same (now known-unroutable) uri must
-	// still get exactly one response -- silence would leave the client
-	// blocked forever, which is a real defect, not an acceptable
-	// consequence of "no default server". It gets a null result: not
-	// MethodNotFound (the merged capabilities say the method exists, and
-	// it does work for routable documents), not an error, just "no
-	// answer for this document".
 	resp := mustCall(t, client, "textDocument/hover", positionParams(uri))
 	if resp.Error != nil {
 		t.Fatalf("hover on unroutable document: unexpected error: %v", resp.Error)
@@ -327,12 +281,6 @@ func TestRouting_DownstreamRequestIDIsRemapped(t *testing.T) {
 		t.Fatal("timed out waiting for workspace/configuration response to route back to the downstream")
 	}
 
-	// The regression this guards: the id the editor saw for this request
-	// must differ from any id the actionsFake itself used as a *client*
-	// (e.g. its own initialize call to itself doesn't apply here, so
-	// instead we assert the editor actually saw exactly one
-	// workspace/configuration request, proving forwarding-with-remap
-	// executed rather than, say, being silently dropped or misrouted).
 	if len(editor.configRequests) != 1 {
 		t.Fatalf("editor saw %d workspace/configuration requests, want 1", len(editor.configRequests))
 	}
@@ -342,10 +290,6 @@ func TestRouting_DownstreamErrorPropagatesUpstream(t *testing.T) {
 	client, _, actionsFake, _ := setupRoutedSession(t)
 	uri := openWorkflowDoc(t, client, actionsFake)
 
-	// The fake replies MethodNotFound to anything it doesn't specifically
-	// implement; textDocument/definition is one such method, so it
-	// exercises the downstream-error round trip without adding new fake
-	// behavior.
 	resp := mustCall(t, client, "textDocument/definition", positionParams(uri))
 	if resp.Error == nil {
 		t.Fatal("expected an error response, got success")

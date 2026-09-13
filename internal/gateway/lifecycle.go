@@ -15,36 +15,12 @@ import (
 	"github.com/cross-ts/rolling-star/internal/router"
 )
 
-// shutdownTimeout bounds how long handleShutdown waits for all
-// downstream servers to answer "shutdown" before giving up on the slow
-// ones and replying to the upstream client anyway.
 const shutdownTimeout = 5 * time.Second
 
-// exitGracePeriod is how long handleExit waits for a downstream process
-// to exit on its own, after sending it "exit" and closing its stdin,
-// before force-terminating it.
 const exitGracePeriod = 2 * time.Second
 
-// downstreamInitializeTimeout bounds how long handleInitialize waits for
-// a single downstream's "initialize" call to complete. Real language
-// servers can be genuinely slow to start (indexing, warming caches,
-// ...), so this is deliberately generous -- not a responsiveness check.
-// Its actual job is to turn a downstream that never replies (whether
-// hung, crashed without closing its pipe, or deadlocked against us --
-// see the workspace/configuration-during-initialize note in
-// serverhandler.go) into an ordinary "this server failed to initialize"
-// drop via the existing per-server error handling below, instead of an
-// unbounded hang that takes the whole gateway down with it. No config
-// knob for this: add one if and when someone actually hits the limit.
-//
-// A var, not a const, solely so tests can shrink it for the duration of
-// a single test (see TestSession_InitializeTimeoutDropsHungServer)
-// instead of a real test run waiting out the production default.
 var downstreamInitializeTimeout = 45 * time.Second
 
-// initializeParams is the subset of an "initialize" request's params
-// this package needs to decode. Everything else is passed through
-// verbatim via the raw json.RawMessage (see buildDownstreamInitParams).
 type initializeParams struct {
 	RootURI          *string `json:"rootUri"`
 	WorkspaceFolders []struct {
@@ -52,9 +28,6 @@ type initializeParams struct {
 	} `json:"workspaceFolders"`
 }
 
-// handleInitialize implements the upstream "initialize" request. It is
-// handled fully synchronously: nothing else may proceed until this
-// completes, because it is what starts every downstream server.
 func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
 	if m.ID == nil {
 		return
@@ -80,10 +53,6 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 		}
 	}
 
-	// Establish downstream-facing state before any downstream can talk to
-	// us: a server that issues a request during its own "initialize" (see
-	// serverhandler.go) must see a Session whose root is already set, not
-	// one still at its zero value.
 	s.mu.Lock()
 	s.rootPath = rootPath
 	s.mu.Unlock()
@@ -123,15 +92,6 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 	_ = c.Reply(*m.ID, result, nil)
 }
 
-// startServers launches and initializes every configured server
-// concurrently -- each server's own startup (process launch, then its
-// "initialize" round trip) is independent of every other server's, so
-// running them serially would make a client's "initialize" latency the
-// sum of every language server's cold-start time instead of the slowest
-// one. Results are written into pre-sized slices indexed by cfg.Servers'
-// position, then compacted: the index-preserving write is load-bearing,
-// since mergeCapabilities' first-writer-wins tie-break depends on config
-// order (see docs/v1-notes.md).
 func (s *Session) startServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []*Downstream, capsList []json.RawMessage) {
 	servers := make([]*Downstream, len(s.cfg.Servers))
 	caps := make([]json.RawMessage, len(s.cfg.Servers))
@@ -150,10 +110,7 @@ func (s *Session) startServers(ctx context.Context, rawParams map[string]json.Ra
 				s.log.Error("initialize: failed to start server", "server", def.Name, "error", err)
 				return
 			}
-			// Wire the server->client direction now that d exists. Same
-			// package, so setting the unexported field directly is
-			// simplest; see Downstream.Handle's doc comment for what it
-			// does.
+
 			d.sess = s
 
 			initCtx, initCancel := context.WithTimeout(ctx, downstreamInitializeTimeout)
@@ -165,8 +122,6 @@ func (s *Session) startServers(ctx context.Context, rawParams map[string]json.Ra
 				return
 			}
 
-			// Each goroutine owns a distinct index, so writing here needs
-			// no lock: there is no concurrent access to the same slot.
 			servers[i] = d
 			caps[i] = serverCaps
 		})
@@ -182,9 +137,6 @@ func (s *Session) startServers(ctx context.Context, rawParams map[string]json.Ra
 	return started, capsList
 }
 
-// deriveRootPath picks the session's root path from initialize params:
-// the first workspace folder's URI, else rootUri, else the current
-// working directory -- in that order, and only if non-empty.
 func deriveRootPath(p initializeParams) string {
 	if len(p.WorkspaceFolders) > 0 && p.WorkspaceFolders[0].URI != "" {
 		return uriToPath(p.WorkspaceFolders[0].URI)
@@ -198,11 +150,6 @@ func deriveRootPath(p initializeParams) string {
 	return ""
 }
 
-// uriToPath converts a file: URI to a filesystem path via
-// router.FilePath, the same parse internal/router.PathForRouting uses
-// internally. Non-file URIs and unparsable input are returned unchanged,
-// since a root path value of "" would flow into a broken filepath.Rel
-// call regardless.
 func uriToPath(uri string) string {
 	path, ok := router.FilePath(uri)
 	if !ok {
@@ -211,13 +158,6 @@ func uriToPath(uri string) string {
 	return path
 }
 
-// buildDownstreamInitParams derives the initialize params sent to one
-// downstream server from the upstream's raw params: processId is
-// overridden to our own pid, and initializationOptions is replaced with
-// def's configured value (removed entirely if unset). Every other field
-// -- rootUri, workspaceFolders, capabilities, clientInfo, ... -- passes
-// through verbatim, since we forward everything the client can actually
-// do.
 func buildDownstreamInitParams(raw map[string]json.RawMessage, def config.ServerDef) (json.RawMessage, error) {
 	out := maps.Clone(raw)
 
@@ -244,7 +184,6 @@ func buildDownstreamInitParams(raw map[string]json.RawMessage, def config.Server
 	return params, nil
 }
 
-// handleInitialized broadcasts "initialized" to every started server.
 func (s *Session) handleInitialized() {
 	for _, d := range s.snapshotServers() {
 		if err := d.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
@@ -253,11 +192,6 @@ func (s *Session) handleInitialized() {
 	}
 }
 
-// handleShutdown fans "shutdown" out to every server, waits for all of
-// them (bounded by shutdownTimeout), marks the session as shut down
-// (this is the ONLY place that happens -- see ShutdownReceived's doc
-// comment for why Close/shutdownAll must not also set it), and replies
-// to the upstream request.
 func (s *Session) handleShutdown(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
 	s.shutdownAll(ctx)
 
@@ -270,18 +204,6 @@ func (s *Session) handleShutdown(ctx context.Context, c *jsonrpc.Conn, m *jsonrp
 	}
 }
 
-// shutdownAll fans a "shutdown" request out to every currently-running
-// server and waits for all of them (bounded by shutdownTimeout). It is
-// the shared body behind both the protocol-driven handleShutdown and the
-// out-of-band Close (e.g. on SIGINT/SIGTERM, where no upstream
-// "shutdown" request was ever received to reply to).
-//
-// Deliberately does NOT set s.shutdown: that flag means "the upstream
-// client sent us shutdown", which is what ShutdownReceived reports to
-// choose an LSP-correct exit code. Close() also calls this (to shut
-// downstreams down cleanly on a signal) without the client ever having
-// sent "shutdown"; if this function set the flag, an interrupted process
-// would misreport exit code 0. Only handleShutdown sets it.
 func (s *Session) shutdownAll(ctx context.Context) {
 	servers := s.snapshotServers()
 
@@ -299,9 +221,6 @@ func (s *Session) shutdownAll(ctx context.Context) {
 	wg.Wait()
 }
 
-// exitAll sends "exit" to every currently-running server, then gives
-// each a grace period to exit on its own before force-terminating it.
-// Shared body behind handleExit (see Session.Handle) and Close.
 func (s *Session) exitAll() {
 	servers := s.snapshotServers()
 
@@ -320,11 +239,7 @@ func (s *Session) exitAll() {
 
 			select {
 			case <-waited:
-				// The common, well-behaved case: the server saw "exit"
-				// and quit on its own before the grace period elapsed.
-				// Nothing left to do -- terminating an already-exited
-				// process would just reconstruct, via the resulting
-				// errno, the same fact this select arm already knows.
+
 			case <-time.After(exitGracePeriod):
 				if err := d.Terminate(); err != nil {
 					s.log.Warn("exit: failed to terminate server", "server", d.Def.Name, "error", err)
@@ -335,22 +250,11 @@ func (s *Session) exitAll() {
 	wg.Wait()
 }
 
-// Close tears every currently-running downstream server down: "shutdown"
-// then "exit" then (after a grace period) a forced kill for any that
-// haven't exited on their own, exactly like the protocol-driven path but
-// without an upstream request/notification to answer. It is meant for
-// out-of-band teardown -- main's wiring calls this on SIGINT/SIGTERM so
-// an interrupted rolling-star doesn't leave orphaned child language
-// server processes behind. Calling Close after the session has already
-// shut down via the normal protocol path is safe: shutdownAll/exitAll
-// simply iterate an empty server list at that point.
 func (s *Session) Close(ctx context.Context) {
 	s.shutdownAll(ctx)
 	s.exitAll()
 }
 
-// snapshotServers returns a copy of the current server list, safe to
-// range over without holding s.mu.
 func (s *Session) snapshotServers() []*Downstream {
 	s.mu.Lock()
 	defer s.mu.Unlock()

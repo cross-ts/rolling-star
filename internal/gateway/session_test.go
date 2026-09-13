@@ -14,9 +14,6 @@ import (
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 )
 
-// noopHandler drops everything; it stands in for the test "editor" not
-// expecting any server->client requests/notifications from the gateway
-// in these lifecycle-only tests.
 type noopHandler struct{}
 
 func (noopHandler) Handle(context.Context, *jsonrpc.Conn, *jsonrpc.Message) {}
@@ -28,9 +25,6 @@ func testLogger(t *testing.T) *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// multiLauncher dispatches to a different fakeServer per server name, so
-// a single Session (which only has one Launcher) can drive several
-// distinct fakes.
 func multiLauncher(byName map[string]*fakeServer) Launcher {
 	return func(ctx context.Context, def config.ServerDef) (Process, error) {
 		fs, ok := byName[def.Name]
@@ -41,19 +35,11 @@ func multiLauncher(byName map[string]*fakeServer) Launcher {
 	}
 }
 
-// newTestSession wires a Session to launch fakes and starts Serve on one
-// end of an in-memory pipe, returning a client-side jsonrpc.Conn playing
-// the role of the upstream editor, with noopHandler standing in for the
-// editor's own request/notification handling.
 func newTestSession(t *testing.T, cfg *config.Config, byName map[string]*fakeServer) *jsonrpc.Conn {
 	t.Helper()
 	return newTestSessionWithHandler(t, cfg, byName, noopHandler{})
 }
 
-// newTestSessionWithHandler is like newTestSession but lets the caller
-// supply the client-side handler, for tests that need the "editor" to
-// answer downstream-initiated requests (e.g. workspace/configuration) or
-// record notifications (e.g. publishDiagnostics) pushed to it.
 func newTestSessionWithHandler(t *testing.T, cfg *config.Config, byName map[string]*fakeServer, clientHandler jsonrpc.Handler) *jsonrpc.Conn {
 	t.Helper()
 
@@ -68,8 +54,8 @@ func newTestSessionWithHandler(t *testing.T, cfg *config.Config, byName map[stri
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	go client.Run(ctx)              //nolint:errcheck
-	go sess.Serve(ctx, gatewaySide) //nolint:errcheck
+	go client.Run(ctx)
+	go sess.Serve(ctx, gatewaySide)
 
 	return client
 }
@@ -152,9 +138,6 @@ func TestSession_InitializeFanOut(t *testing.T) {
 		t.Errorf("textDocumentSync = %s, want %s", caps["textDocumentSync"], fixedTextDocumentSync)
 	}
 
-	// Each fake received exactly one initialize, with our own pid, the
-	// server-specific initializationOptions (or none), and rootUri passed
-	// through unchanged.
 	for name, fake := range byName {
 		recv := fake.Received()
 		if len(recv) == 0 || recv[0].Method != "initialize" {
@@ -299,8 +282,6 @@ func TestSession_InitializedShutdownExit(t *testing.T) {
 		t.Fatalf("notify exit: %v", err)
 	}
 
-	// Wait for exit's fan-out (send exit, grace period, terminate) to
-	// finish on both fakes; termination tears down their connections.
 	for _, fake := range byName {
 		waitFor(t, func() bool {
 			select {

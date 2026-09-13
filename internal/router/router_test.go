@@ -2,9 +2,6 @@ package router
 
 import "testing"
 
-// yamlRules is the validation case from the plan: actions-languageserver
-// claims GitHub Actions workflow files, yaml-language-server claims the
-// rest.
 var yamlRules = []Rule{
 	{Server: "actions", Language: "yaml", Pattern: ".github/workflows/**/*.{yml,yaml}"},
 	{Server: "yaml", Language: "yaml", Pattern: "**/*.{yml,yaml}"},
@@ -31,15 +28,7 @@ func TestRoute_Table(t *testing.T) {
 		{"yaml docker-compose", "/repo", "file:///repo/docker-compose.yml", "yaml", "yaml", true},
 		{"yaml k8s", "/repo", "file:///repo/k8s/deploy.yaml", "yaml", "yaml", true},
 		{"markdown none", "/repo", "file:///repo/README.md", "markdown", "", false},
-		// Both rules require Language == "yaml" (see yamlRules / the
-		// example config in the plan), so a "json" languageId cannot
-		// match either rule and falls through to no match. The plan's
-		// table lists this row's expectation as "yaml", but that is
-		// only reachable if the second rule's Language were empty
-		// (matches any), which it is not in the given rule set. Per
-		// Route's documented semantics (Language must equal
-		// languageID unless empty), the correct result here is no
-		// match. See implementor report for this deviation.
+
 		{"language mismatch falls through", "/repo", "file:///repo/.github/workflows/ci.yml", "json", "", false},
 		{"outside root fallback", "/repo", "file:///elsewhere/a.yml", "yaml", "yaml", true},
 		{"percent-decoding", "/repo", "file:///repo/my%20dir/a.yml", "yaml", "yaml", true},

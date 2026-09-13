@@ -48,10 +48,7 @@ func TestStartDownstream_InitializeCapabilitiesShutdown(t *testing.T) {
 	if err := d.Conn().Notify("exit", nil); err != nil {
 		t.Fatalf("Notify exit: %v", err)
 	}
-	// Notify's underlying write returning only means the fake has read the
-	// bytes off the pipe, not that its Handle (running in the fake's own
-	// goroutine) has appended to its receipts yet; wait for that before
-	// asserting on Received() or terminating out from under it.
+
 	waitForReceipt(t, fs, "exit")
 
 	if err := d.Terminate(); err != nil {
