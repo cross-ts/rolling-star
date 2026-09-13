@@ -98,7 +98,7 @@ func (g *Gateway) handleDidOpen(m *jsonrpc.Message) {
 
 	server := g.routeAndBind(p.TextDocument.URI, p.TextDocument.LanguageID, true)
 	if server != nil {
-		relay(g.log, g.client, server.Conn(), m, server.Name())
+		relay(g.log, g.client.Conn(), server.Conn(), m, server.Name())
 	}
 }
 
@@ -111,7 +111,7 @@ func (g *Gateway) handleDidClose(m *jsonrpc.Message) {
 
 	server, _ := g.lookupBinding(uri)
 	if server != nil {
-		relay(g.log, g.client, server.Conn(), m, server.Name())
+		relay(g.log, g.client.Conn(), server.Conn(), m, server.Name())
 	}
 
 	g.mu.Lock()

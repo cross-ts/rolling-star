@@ -3,11 +3,11 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"sync"
 
+	"github.com/cross-ts/rolling-star/internal/client"
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 	"github.com/cross-ts/rolling-star/internal/languageserver"
@@ -16,25 +16,19 @@ import (
 
 type languageServerFactory func(context.Context, config.LanguageServer) (*languageserver.Server, error)
 
-type languageServerMessage struct {
-	conn    *jsonrpc.Conn
-	message *jsonrpc.Message
-}
-
 type Gateway struct {
 	definitions         []config.LanguageServer
 	router              *router.Router
 	log                 *slog.Logger
 	startLanguageServer languageServerFactory
 
-	client *jsonrpc.Conn
+	client *client.Client
 
-	mu                     sync.Mutex
-	languageServers        []*languageserver.Server
-	documentServers        map[string]*languageserver.Server
-	rootPath               string
-	shutdown               bool
-	languageServerMessages chan languageServerMessage
+	mu              sync.Mutex
+	languageServers []*languageserver.Server
+	documentServers map[string]*languageserver.Server
+	rootPath        string
+	shutdown        bool
 }
 
 func New(definitions []config.LanguageServer) (*Gateway, error) {
@@ -55,36 +49,19 @@ func New(definitions []config.LanguageServer) (*Gateway, error) {
 	}
 
 	return &Gateway{
-		definitions:            slices.Clone(definitions),
-		router:                 r,
-		log:                    slog.Default(),
-		startLanguageServer:    languageserver.Start,
-		documentServers:        make(map[string]*languageserver.Server),
-		languageServerMessages: make(chan languageServerMessage),
+		definitions:         slices.Clone(definitions),
+		router:              r,
+		log:                 slog.Default(),
+		startLanguageServer: languageserver.Start,
+		documentServers:     make(map[string]*languageserver.Server),
 	}, nil
 }
 
-func (g *Gateway) Serve(ctx context.Context, transport io.ReadWriteCloser) error {
-	g.client = jsonrpc.NewConn(transport)
-	clientDone := make(chan error, 1)
-	go func() { clientDone <- g.client.Run(ctx) }()
-
-	for {
-		select {
-		case m, ok := <-g.client.Messages():
-			if !ok {
-				return <-clientDone
-			}
-			g.handleClientMessage(ctx, g.client, m)
-		case event := <-g.languageServerMessages:
-			g.handleLanguageServerMessage(event)
-		case err := <-clientDone:
-			return err
-		case <-ctx.Done():
-			_ = g.client.Close()
-			return ctx.Err()
-		}
-	}
+func (g *Gateway) Serve(ctx context.Context, client *client.Client) error {
+	g.client = client
+	return client.Run(ctx, func(m *jsonrpc.Message) {
+		g.handleClientEvent(ctx, m)
+	})
 }
 
 func (g *Gateway) ShutdownReceived() bool {
@@ -93,7 +70,8 @@ func (g *Gateway) ShutdownReceived() bool {
 	return g.shutdown
 }
 
-func (g *Gateway) handleClientMessage(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
+func (g *Gateway) handleClientEvent(ctx context.Context, m *jsonrpc.Message) {
+	c := g.client.Conn()
 	switch m.Method {
 	case "initialize":
 		g.handleInitialize(ctx, c, m)
@@ -108,6 +86,6 @@ func (g *Gateway) handleClientMessage(ctx context.Context, c *jsonrpc.Conn, m *j
 	}
 }
 
-func (g *Gateway) handleLanguageServerMessage(event languageServerMessage) {
-	relay(g.log, event.conn, g.client, event.message, "client")
+func (g *Gateway) handleLanguageServerEvent(server *languageserver.Server, m *jsonrpc.Message) {
+	relay(g.log, server.Conn(), g.client.Conn(), m, "client")
 }

@@ -46,6 +46,28 @@ func (s *Server) Conn() *jsonrpc.Conn { return s.conn }
 
 func (s *Server) Done() <-chan struct{} { return s.conn.Done() }
 
+func (s *Server) Run(ctx context.Context, handle func(*jsonrpc.Message)) error {
+	done := make(chan error, 1)
+	go func() { done <- s.conn.Run(ctx) }()
+
+	for {
+		select {
+		case m, ok := <-s.conn.Messages():
+			if !ok {
+				return <-done
+			}
+			if handle != nil {
+				handle(m)
+			}
+		case err := <-done:
+			return err
+		case <-ctx.Done():
+			_ = s.conn.Close()
+			return ctx.Err()
+		}
+	}
+}
+
 func (s *Server) Wait() error { return s.proc.Wait() }
 
 func (s *Server) call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
