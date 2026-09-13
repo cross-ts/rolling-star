@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	clientpkg "github.com/cross-ts/rolling-star/internal/client"
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 )
@@ -42,12 +43,13 @@ func newTestGatewayWithHandler(t *testing.T, cfg *config.Config, byName map[stri
 
 	clientSide, gatewaySide := net.Pipe()
 	client := jsonrpc.NewConn(clientSide)
+	gatewayClient := clientpkg.New(gatewaySide)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
 	go func() { _ = runMessages(ctx, client, clientHandler) }()
-	go g.Serve(ctx, gatewaySide)
+	go g.Serve(ctx, gatewayClient)
 
 	return client
 }

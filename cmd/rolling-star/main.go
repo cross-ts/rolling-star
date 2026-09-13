@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/cross-ts/rolling-star/internal/client"
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/gateway"
 	"github.com/cross-ts/rolling-star/internal/transport"
@@ -47,7 +48,7 @@ func run() int {
 		return 1
 	}
 
-	serveErr := g.Serve(context.Background(), transport.Stdio())
+	serveErr := g.Serve(context.Background(), client.New(transport.Stdio()))
 
 	if serveErr != nil {
 		logger.Error("connection ended with an error", "error", serveErr)

@@ -43,7 +43,7 @@ var broadcastMethods = map[string]bool{
 	"$/setTrace":                          true,
 }
 
-func (g *Gateway) route(c *jsonrpc.Conn, m *jsonrpc.Message) {
+func (g *Gateway) route(c endpoint, m *jsonrpc.Message) {
 	switch m.Method {
 	case "textDocument/didOpen":
 		g.handleDidOpen(m)
@@ -98,7 +98,7 @@ func (g *Gateway) handleDidOpen(m *jsonrpc.Message) {
 
 	server := g.routeAndBind(p.TextDocument.URI, p.TextDocument.LanguageID, true)
 	if server != nil {
-		relay(g.log, g.client, server.Conn(), m, server.Name())
+		relay(g.log, g.client, server, m, server.Name())
 	}
 }
 
@@ -111,7 +111,7 @@ func (g *Gateway) handleDidClose(m *jsonrpc.Message) {
 
 	server, _ := g.lookupBinding(uri)
 	if server != nil {
-		relay(g.log, g.client, server.Conn(), m, server.Name())
+		relay(g.log, g.client, server, m, server.Name())
 	}
 
 	g.mu.Lock()
@@ -119,7 +119,7 @@ func (g *Gateway) handleDidClose(m *jsonrpc.Message) {
 	g.mu.Unlock()
 }
 
-func (g *Gateway) handleDocumentMessage(c *jsonrpc.Conn, m *jsonrpc.Message, uri string) {
+func (g *Gateway) handleDocumentMessage(c endpoint, m *jsonrpc.Message, uri string) {
 	server, known := g.lookupBinding(uri)
 	if !known {
 		server = g.routeAndBind(uri, "", false)
@@ -130,7 +130,7 @@ func (g *Gateway) handleDocumentMessage(c *jsonrpc.Conn, m *jsonrpc.Message, uri
 		}
 		return
 	}
-	relay(g.log, c, server.Conn(), m, server.Name())
+	relay(g.log, c, server, m, server.Name())
 }
 
 func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) *languageserver.Server {
@@ -177,13 +177,13 @@ func (g *Gateway) lookupBinding(uri string) (server *languageserver.Server, know
 
 func (g *Gateway) broadcastNotification(m *jsonrpc.Message) {
 	for _, server := range g.snapshotLanguageServers() {
-		if err := server.Conn().Notify(m.Method, m.Params); err != nil {
+		if err := server.Notify(m.Method, m.Params); err != nil {
 			g.log.Error("broadcast notification failed", "server", server.Name(), "method", m.Method, "error", err)
 		}
 	}
 }
 
-func relay(log *slog.Logger, from, to *jsonrpc.Conn, m *jsonrpc.Message, peer string) {
+func relay(log *slog.Logger, from, to endpoint, m *jsonrpc.Message, peer string) {
 	if !m.IsRequest() {
 		if err := to.Notify(m.Method, m.Params); err != nil {
 			if log != nil {

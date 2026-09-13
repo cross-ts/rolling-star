@@ -26,7 +26,7 @@ func TestStart_InitializeCapabilitiesShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	go func() { _ = runMessages(ctx, server.Conn(), nil) }()
+	go func() { _ = server.Run(ctx, nil) }()
 
 	gotCaps, err := server.Initialize(ctx, json.RawMessage(`{"processId":1}`))
 	if err != nil {
@@ -36,7 +36,7 @@ func TestStart_InitializeCapabilitiesShutdown(t *testing.T) {
 		t.Fatalf("Initialize capabilities = %s, want %s", gotCaps, caps)
 	}
 
-	if err := server.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
+	if err := server.Notify("initialized", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("Notify initialized: %v", err)
 	}
 
@@ -46,7 +46,7 @@ func TestStart_InitializeCapabilitiesShutdown(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	if err := server.Conn().Notify("exit", nil); err != nil {
+	if err := server.Notify("exit", nil); err != nil {
 		t.Fatalf("Notify exit: %v", err)
 	}
 
@@ -79,7 +79,7 @@ func TestStart_InitializeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	go func() { _ = runMessages(ctx, server.Conn(), nil) }()
+	go func() { _ = server.Run(ctx, nil) }()
 
 	if _, err := server.Initialize(ctx, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("Initialize: expected error, got nil")
