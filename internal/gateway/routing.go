@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -87,18 +88,18 @@ func (g *Gateway) handleDidOpen(m *jsonrpc.Message) {
 		} `json:"textDocument"`
 	}
 	if err := json.Unmarshal(m.Params, &p); err != nil {
-		g.log.Error("didOpen: failed to decode params", "error", err)
+		slog.Error("didOpen: failed to decode params", "error", err)
 		return
 	}
 	if p.TextDocument.URI == "" {
-		g.log.Error("didOpen: missing textDocument.uri")
+		slog.Error("didOpen: missing textDocument.uri")
 		return
 	}
 
 	server := g.routeAndBind(p.TextDocument.URI, p.TextDocument.LanguageID, true)
 	if server != nil {
 		if err := server.Notify(m.Method, m.Params); err != nil {
-			g.log.Error("failed to forward client notification", "server", server.Name(), "method", m.Method, "error", err)
+			slog.Error("failed to forward client notification", "server", server.Name(), "method", m.Method, "error", err)
 		}
 	}
 }
@@ -106,14 +107,14 @@ func (g *Gateway) handleDidOpen(m *jsonrpc.Message) {
 func (g *Gateway) handleDidClose(m *jsonrpc.Message) {
 	uri, ok := docURI(m.Params)
 	if !ok {
-		g.log.Error("didClose: missing uri")
+		slog.Error("didClose: missing uri")
 		return
 	}
 
 	server, _ := g.lookupBinding(uri)
 	if server != nil {
 		if err := server.Notify(m.Method, m.Params); err != nil {
-			g.log.Error("failed to forward client notification", "server", server.Name(), "method", m.Method, "error", err)
+			slog.Error("failed to forward client notification", "server", server.Name(), "method", m.Method, "error", err)
 		}
 	}
 
@@ -136,7 +137,7 @@ func (g *Gateway) handleDocumentMessage(m *jsonrpc.Message, uri string) {
 
 	if !m.IsRequest() {
 		if err := server.Notify(m.Method, m.Params); err != nil {
-			g.log.Error("failed to forward client notification", "server", server.Name(), "method", m.Method, "error", err)
+			slog.Error("failed to forward client notification", "server", server.Name(), "method", m.Method, "error", err)
 		}
 		return
 	}
@@ -179,14 +180,14 @@ func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) *languag
 
 	switch {
 	case server != nil:
-		g.log.Info("routed document to language server",
+		slog.Info("routed document to language server",
 			"uri", uri, "languageId", languageID, "path", path, "server", server.Name())
 	case matched && warnOnMiss:
 
-		g.log.Warn("document matched a routing rule, but its server is not running; further messages for it will be dropped",
+		slog.Warn("document matched a routing rule, but its server is not running; further messages for it will be dropped",
 			"uri", uri, "languageId", languageID, "path", path, "server", serverName)
 	case warnOnMiss:
-		g.log.Warn("no language server matched document; further messages for it will be dropped",
+		slog.Warn("no language server matched document; further messages for it will be dropped",
 			"uri", uri, "languageId", languageID, "path", path)
 	}
 	return server
@@ -202,7 +203,7 @@ func (g *Gateway) lookupBinding(uri string) (server *languageserver.Server, know
 func (g *Gateway) broadcastNotification(m *jsonrpc.Message) {
 	for _, server := range g.snapshotLanguageServers() {
 		if err := server.Notify(m.Method, m.Params); err != nil {
-			g.log.Error("broadcast notification failed", "server", server.Name(), "method", m.Method, "error", err)
+			slog.Error("broadcast notification failed", "server", server.Name(), "method", m.Method, "error", err)
 		}
 	}
 }

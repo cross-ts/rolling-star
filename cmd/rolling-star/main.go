@@ -33,23 +33,21 @@ func run() int {
 		return 2
 	}
 
-	logger := slog.Default()
-
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		logger.Error("failed to load config", "error", err)
+		slog.Error("failed to load config", "error", err)
 		return 1
 	}
 
 	// TODO: 全体のConfigとgatewayのConfigを分離する
 	g, err := gateway.New(cfg.Servers)
 	if err != nil {
-		logger.Error("failed to build gateway", "error", err)
+		slog.Error("failed to build gateway", "error", err)
 		return 1
 	}
 
 	if err := g.Serve(context.Background(), client.New(transport.Stdio())); err != nil {
-		logger.Error("connection ended with an error", "error", err)
+		slog.Error("connection ended with an error", "error", err)
 		return 1
 	}
 

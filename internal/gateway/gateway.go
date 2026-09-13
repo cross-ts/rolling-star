@@ -22,7 +22,6 @@ var errClientDisconnectedBeforeShutdown = errors.New("gateway: client disconnect
 type Gateway struct {
 	definitions         []config.LanguageServer
 	router              *router.Router
-	log                 *slog.Logger
 	startLanguageServer languageServerFactory
 
 	client *client.Client
@@ -54,7 +53,6 @@ func New(definitions []config.LanguageServer) (*Gateway, error) {
 	return &Gateway{
 		definitions:         slices.Clone(definitions),
 		router:              r,
-		log:                 slog.Default(),
 		startLanguageServer: languageserver.Start,
 		documentServers:     make(map[string]*languageserver.Server),
 	}, nil
@@ -95,7 +93,7 @@ func (g *Gateway) handleClientEvent(ctx context.Context, m *jsonrpc.Message) {
 func (g *Gateway) handleLanguageServerEvent(server *languageserver.Server, m *jsonrpc.Message) {
 	if !m.IsRequest() {
 		if err := g.client.Notify(m.Method, m.Params); err != nil {
-			g.log.Error("language server notification failed", "server", server.Name(), "method", m.Method, "error", err)
+			slog.Error("language server notification failed", "server", server.Name(), "method", m.Method, "error", err)
 		}
 		return
 	}

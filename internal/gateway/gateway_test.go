@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"os"
 	"testing"
@@ -26,13 +25,6 @@ func (eofTransport) Read([]byte) (int, error)    { return 0, io.EOF }
 func (eofTransport) Write(p []byte) (int, error) { return len(p), nil }
 func (eofTransport) Close() error                { return nil }
 
-func testLogger(t *testing.T) *slog.Logger {
-	if testing.Verbose() {
-		return slog.New(slog.NewTextHandler(os.Stderr, nil))
-	}
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
 func newTestGateway(t *testing.T, cfg *config.Config, byName map[string]*fakeServer) *jsonrpc.Conn {
 	t.Helper()
 	return newTestGatewayWithHandler(t, cfg, byName, noopHandler{})
@@ -46,7 +38,6 @@ func newTestGatewayWithHandler(t *testing.T, cfg *config.Config, byName map[stri
 		t.Fatalf("New: %v", err)
 	}
 	g.startLanguageServer = newFakeLanguageServerFactory(byName)
-	g.log = testLogger(t)
 
 	clientSide, gatewaySide := net.Pipe()
 	client := jsonrpc.NewConn(clientSide)
