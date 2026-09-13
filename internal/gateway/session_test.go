@@ -242,6 +242,38 @@ func TestSession_InitializeAllFail(t *testing.T) {
 	}
 }
 
+func TestSession_InitializeTimeoutDropsHungServer(t *testing.T) {
+	original := downstreamInitializeTimeout
+	downstreamInitializeTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { downstreamInitializeTimeout = original })
+
+	hungFake := newFakeServer(json.RawMessage(`{}`))
+	hungFake.hangOnInitialize = true
+	okFake := newFakeServer(json.RawMessage(`{"hoverProvider":true}`))
+	byName := map[string]*fakeServer{"actions": hungFake, "yaml": okFake}
+
+	client := newTestSession(t, twoServerConfig(), byName)
+
+	resp := mustCall(t, client, "initialize", json.RawMessage(`{"rootUri":"file:///repo"}`))
+	if resp.Error != nil {
+		t.Fatalf("initialize: unexpected error (the surviving server should still bring the session up): %v", resp.Error)
+	}
+
+	var result struct {
+		Capabilities json.RawMessage `json:"capabilities"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	var caps map[string]json.RawMessage
+	if err := json.Unmarshal(result.Capabilities, &caps); err != nil {
+		t.Fatalf("decode capabilities: %v", err)
+	}
+	if v, ok := asJSONBool(caps["hoverProvider"]); !ok || !v {
+		t.Errorf("hoverProvider = %s, want true (from the surviving server; the hung one must have been dropped)", caps["hoverProvider"])
+	}
+}
+
 func TestSession_InitializedShutdownExit(t *testing.T) {
 	actionsFake := newFakeServer(json.RawMessage(`{}`))
 	yamlFake := newFakeServer(json.RawMessage(`{}`))

@@ -24,6 +24,23 @@ const shutdownTimeout = 5 * time.Second
 // before force-terminating it.
 const exitGracePeriod = 2 * time.Second
 
+// downstreamInitializeTimeout bounds how long handleInitialize waits for
+// a single downstream's "initialize" call to complete. Real language
+// servers can be genuinely slow to start (indexing, warming caches,
+// ...), so this is deliberately generous -- not a responsiveness check.
+// Its actual job is to turn a downstream that never replies (whether
+// hung, crashed without closing its pipe, or deadlocked against us --
+// see the workspace/configuration-during-initialize note in
+// serverhandler.go) into an ordinary "this server failed to initialize"
+// drop via the existing per-server error handling below, instead of an
+// unbounded hang that takes the whole gateway down with it. No config
+// knob for this: add one if and when someone actually hits the limit.
+//
+// A var, not a const, solely so tests can shrink it for the duration of
+// a single test (see TestSession_InitializeTimeoutDropsHungServer)
+// instead of a real test run waiting out the production default.
+var downstreamInitializeTimeout = 45 * time.Second
+
 // initializeParams is the subset of an "initialize" request's params
 // this package needs to decode. Everything else is passed through
 // verbatim via the raw json.RawMessage (see buildDownstreamInitParams).
@@ -82,7 +99,10 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 		// see downstreamHandler's doc comment for what it does.
 		d.handler = &downstreamHandler{s: s, d: d}
 
-		if _, err := d.Initialize(ctx, params); err != nil {
+		initCtx, initCancel := context.WithTimeout(ctx, downstreamInitializeTimeout)
+		_, err = d.Initialize(initCtx, params)
+		initCancel()
+		if err != nil {
 			s.log.Error("initialize: server failed to initialize", "server", def.Name, "error", err)
 			_ = d.Terminate()
 			continue

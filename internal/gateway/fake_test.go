@@ -31,6 +31,11 @@ type fakeServer struct {
 	// error instead of caps, simulating a server that fails to initialize.
 	initErr *jsonrpc.Error
 
+	// hangOnInitialize, if true, makes this fake record "initialize" but
+	// never reply to it at all, simulating a downstream that deadlocks or
+	// never responds (see TestSession_InitializeTimeoutDropsHungServer).
+	hangOnInitialize bool
+
 	mu       sync.Mutex
 	receipts []received
 	conn     *jsonrpc.Conn // set once the pipe is established; see newFakeLauncher
@@ -51,6 +56,9 @@ func (f *fakeServer) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Messa
 
 	switch m.Method {
 	case "initialize":
+		if f.hangOnInitialize {
+			return
+		}
 		if f.initErr != nil {
 			_ = c.Reply(*m.ID, nil, f.initErr)
 			return

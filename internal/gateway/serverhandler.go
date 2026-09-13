@@ -44,8 +44,14 @@ type downstreamHandler struct {
 // fully synchronous), so a spec-conformant client cannot answer until we
 // return, and a spec-conformant server does not send such a request
 // before its own initialize response. Only a non-conformant peer on
-// either side hits this. The correct fix is answering it locally via
-// serverHandlers instead of forwarding, which is deferred v1-scope work.
+// either side hits this, and when it does, it is no longer unbounded:
+// lifecycle.go's handleInitialize bounds that server's Initialize call
+// with downstreamInitializeTimeout, so a deadlocked downstream is
+// eventually logged and dropped via the ordinary
+// failed-to-initialize path, and the rest of the session still comes
+// up. That is a bounded degradation, not a fix -- the correct fix is
+// still answering such requests locally via serverHandlers instead of
+// forwarding, which is deferred v1-scope work.
 func (h *downstreamHandler) Handle(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
 	if handler, ok := h.s.serverHandlers[m.Method]; ok && m.IsRequest() {
 		result, errObj := handler(ctx, h.d, m.Params)
