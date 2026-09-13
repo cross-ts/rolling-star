@@ -104,11 +104,12 @@ func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string
 				return
 			}
 
-			server, err := StartLanguageServer(ctx, def, g.upstream, g.log, g.launch)
+			server, err := StartLanguageServer(ctx, def, g.launch)
 			if err != nil {
 				g.log.Error("initialize: failed to start server", "server", def.Name, "error", err)
 				return
 			}
+			go g.runLanguageServer(ctx, server)
 
 			initCtx, initCancel := context.WithTimeout(ctx, languageServerInitializeTimeout)
 			serverCaps, err := server.Initialize(initCtx, params)
@@ -132,6 +133,25 @@ func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string
 		}
 	}
 	return started, capsList
+}
+
+func (g *Gateway) runLanguageServer(ctx context.Context, server *LanguageServer) {
+	conn := server.Conn()
+	done := make(chan error, 1)
+	go func() { done <- conn.Run(ctx) }()
+
+	for m := range conn.Messages() {
+		select {
+		case g.languageServerMessages <- languageServerMessage{conn: conn, message: m}:
+		case <-ctx.Done():
+			_ = conn.Close()
+			return
+		}
+	}
+
+	if err := <-done; err != nil {
+		g.log.Error("language server connection ended with an error", "server", server.definition.Name, "error", err)
+	}
 }
 
 func deriveRootPath(p initializeParams) string {

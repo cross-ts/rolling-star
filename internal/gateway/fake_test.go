@@ -12,6 +12,22 @@ import (
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 )
 
+type messageHandler interface {
+	Handle(context.Context, *jsonrpc.Conn, *jsonrpc.Message)
+}
+
+func runMessages(ctx context.Context, conn *jsonrpc.Conn, handler messageHandler) error {
+	done := make(chan error, 1)
+	go func() { done <- conn.Run(ctx) }()
+
+	for message := range conn.Messages() {
+		if handler != nil {
+			handler.Handle(ctx, conn, message)
+		}
+	}
+	return <-done
+}
+
 type received struct {
 	Method string
 	Params json.RawMessage
@@ -135,8 +151,8 @@ func (p *pipeProcess) Wait() error {
 func newFakeLauncher(fs *fakeServer) Launcher {
 	return func(ctx context.Context, def config.LanguageServer) (Process, error) {
 		clientSide, serverSide := net.Pipe()
-		fs.conn = jsonrpc.NewConn(serverSide, fs)
-		go fs.conn.Run(ctx)
+		fs.conn = jsonrpc.NewConn(serverSide)
+		go func() { _ = runMessages(ctx, fs.conn, fs) }()
 		return newPipeProcess(clientSide), nil
 	}
 }
