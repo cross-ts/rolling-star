@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -15,6 +16,8 @@ import (
 )
 
 type languageServerFactory func(context.Context, config.LanguageServer) (*languageserver.Server, error)
+
+var errClientDisconnectedBeforeShutdown = errors.New("gateway: client disconnected before shutdown")
 
 type Gateway struct {
 	definitions         []config.LanguageServer
@@ -59,15 +62,19 @@ func New(definitions []config.LanguageServer) (*Gateway, error) {
 
 func (g *Gateway) Serve(ctx context.Context, client *client.Client) error {
 	g.client = client
-	return client.Run(ctx, func(m *jsonrpc.Message) {
+	if err := client.Run(ctx, func(m *jsonrpc.Message) {
 		g.handleClientEvent(ctx, m)
-	})
-}
+	}); err != nil {
+		return err
+	}
 
-func (g *Gateway) ShutdownReceived() bool {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.shutdown
+	shutdown := g.shutdown
+	g.mu.Unlock()
+	if !shutdown {
+		return errClientDisconnectedBeforeShutdown
+	}
+	return nil
 }
 
 func (g *Gateway) handleClientEvent(ctx context.Context, m *jsonrpc.Message) {
