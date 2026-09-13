@@ -113,8 +113,6 @@ func TestFramingMalformedHeader(t *testing.T) {
 	}
 }
 
-// slowReader trickles bytes through one at a time to exercise body reads
-// that arrive across multiple underlying Read calls.
 type slowReader struct {
 	data []byte
 	pos  int
@@ -124,8 +122,7 @@ func (s *slowReader) Read(p []byte) (int, error) {
 	if s.pos >= len(s.data) {
 		return 0, io.EOF
 	}
-	// Deliver a single byte per call, and pace it slightly so a naive
-	// implementation that assumes one Read fills the buffer would fail.
+
 	p[0] = s.data[s.pos]
 	s.pos++
 	time.Sleep(time.Microsecond)

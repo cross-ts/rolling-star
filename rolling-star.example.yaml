@@ -1,14 +1,3 @@
-# Example rolling-star configuration.
-#
-# Servers are tried in order, first-match-wins: a document is routed to the
-# first server whose selectors match its languageId and/or path. This is
-# why the "actions" entry (specific) is listed before "yaml" (generic
-# fallback) below — ".github/workflows/**/*.{yml,yaml}" and
-# "**/*.{yml,yaml}" both match workflow files, but only the first match is
-# used.
-#
-# Selector patterns match the path relative to the workspace root, not the
-# document URI and not an absolute filesystem path.
 servers:
   - name: actions
     command: actions-languageserver

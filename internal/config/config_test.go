@@ -36,8 +36,6 @@ func TestLoad_Valid(t *testing.T) {
 		t.Errorf("Servers[1].Name = %q, want %q", yamlSrv.Name, "yaml")
 	}
 
-	// initializationOptions must round-trip to the expected JSON shape,
-	// with no conversion step required by callers (see package doc).
 	got, err := json.Marshal(yamlSrv.InitializationOptions)
 	if err != nil {
 		t.Fatalf("json.Marshal(InitializationOptions): %v", err)
