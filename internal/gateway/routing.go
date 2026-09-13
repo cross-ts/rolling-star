@@ -3,7 +3,6 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 
@@ -43,7 +42,7 @@ var broadcastMethods = map[string]bool{
 	"$/setTrace":                          true,
 }
 
-func (g *Gateway) route(c endpoint, m *jsonrpc.Message) {
+func (g *Gateway) route(m *jsonrpc.Message) {
 	switch m.Method {
 	case "textDocument/didOpen":
 		g.handleDidOpen(m)
@@ -61,7 +60,7 @@ func (g *Gateway) route(c endpoint, m *jsonrpc.Message) {
 	}
 
 	if uri, ok := docURI(m.Params); ok {
-		g.handleDocumentMessage(c, m, uri)
+		g.handleDocumentMessage(m, uri)
 		return
 	}
 
@@ -72,7 +71,7 @@ func (g *Gateway) route(c endpoint, m *jsonrpc.Message) {
 
 	if m.IsRequest() {
 
-		_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
+		_ = g.client.Reply(*m.ID, nil, &jsonrpc.Error{
 			Code:    jsonrpc.CodeMethodNotFound,
 			Message: fmt.Sprintf("rolling-star: no document context and no route for %s", m.Method),
 		})
@@ -98,7 +97,9 @@ func (g *Gateway) handleDidOpen(m *jsonrpc.Message) {
 
 	server := g.routeAndBind(p.TextDocument.URI, p.TextDocument.LanguageID, true)
 	if server != nil {
-		relay(g.log, g.client, server, m, server.Name())
+		if err := server.Notify(m.Method, m.Params); err != nil {
+			g.log.Error("failed to forward client notification", "server", server.Name(), "method", m.Method, "error", err)
+		}
 	}
 }
 
@@ -111,7 +112,9 @@ func (g *Gateway) handleDidClose(m *jsonrpc.Message) {
 
 	server, _ := g.lookupBinding(uri)
 	if server != nil {
-		relay(g.log, g.client, server, m, server.Name())
+		if err := server.Notify(m.Method, m.Params); err != nil {
+			g.log.Error("failed to forward client notification", "server", server.Name(), "method", m.Method, "error", err)
+		}
 	}
 
 	g.mu.Lock()
@@ -119,18 +122,39 @@ func (g *Gateway) handleDidClose(m *jsonrpc.Message) {
 	g.mu.Unlock()
 }
 
-func (g *Gateway) handleDocumentMessage(c endpoint, m *jsonrpc.Message, uri string) {
+func (g *Gateway) handleDocumentMessage(m *jsonrpc.Message, uri string) {
 	server, known := g.lookupBinding(uri)
 	if !known {
 		server = g.routeAndBind(uri, "", false)
 	}
 	if server == nil {
 		if m.IsRequest() {
-			_ = c.Reply(*m.ID, nil, nil)
+			_ = g.client.Reply(*m.ID, nil, nil)
 		}
 		return
 	}
-	relay(g.log, c, server, m, server.Name())
+
+	if !m.IsRequest() {
+		if err := server.Notify(m.Method, m.Params); err != nil {
+			g.log.Error("failed to forward client notification", "server", server.Name(), "method", m.Method, "error", err)
+		}
+		return
+	}
+
+	ch, err := server.Call(m.Method, m.Params)
+	if err != nil {
+		_ = g.client.Reply(*m.ID, nil, &jsonrpc.Error{
+			Code:    jsonrpc.CodeInternalError,
+			Message: fmt.Sprintf("rolling-star: failed to forward %s to %s: %v", m.Method, server.Name(), err),
+		})
+		return
+	}
+
+	id := *m.ID
+	go func() {
+		msg := <-ch
+		_ = g.client.Reply(id, msg.Result, msg.Error)
+	}()
 }
 
 func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) *languageserver.Server {
@@ -181,30 +205,4 @@ func (g *Gateway) broadcastNotification(m *jsonrpc.Message) {
 			g.log.Error("broadcast notification failed", "server", server.Name(), "method", m.Method, "error", err)
 		}
 	}
-}
-
-func relay(log *slog.Logger, from, to endpoint, m *jsonrpc.Message, peer string) {
-	if !m.IsRequest() {
-		if err := to.Notify(m.Method, m.Params); err != nil {
-			if log != nil {
-				log.Error("relay notification failed", "peer", peer, "method", m.Method, "error", err)
-			}
-		}
-		return
-	}
-
-	ch, err := to.Call(m.Method, m.Params)
-	if err != nil {
-		_ = from.Reply(*m.ID, nil, &jsonrpc.Error{
-			Code:    jsonrpc.CodeInternalError,
-			Message: fmt.Sprintf("rolling-star: failed to forward %s to %s: %v", m.Method, peer, err),
-		})
-		return
-	}
-
-	id := *m.ID
-	go func() {
-		msg := <-ch
-		_ = from.Reply(id, msg.Result, msg.Error)
-	}()
 }
