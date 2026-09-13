@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -16,12 +15,6 @@ import (
 )
 
 type languageServerFactory func(context.Context, config.LanguageServer) (*languageserver.Server, error)
-
-type endpoint interface {
-	Notify(string, json.RawMessage) error
-	Call(string, json.RawMessage) (<-chan *jsonrpc.Message, error)
-	Reply(jsonrpc.ID, json.RawMessage, *jsonrpc.Error) error
-}
 
 type Gateway struct {
 	definitions         []config.LanguageServer
@@ -80,18 +73,38 @@ func (g *Gateway) ShutdownReceived() bool {
 func (g *Gateway) handleClientEvent(ctx context.Context, m *jsonrpc.Message) {
 	switch m.Method {
 	case "initialize":
-		g.handleInitialize(ctx, g.client, m)
+		g.handleInitialize(ctx, m)
 	case "initialized":
 		g.handleInitialized()
 	case "shutdown":
-		g.handleShutdown(ctx, g.client, m)
+		g.handleShutdown(ctx, m)
 	case "exit":
 		g.exitAll()
 	default:
-		g.route(g.client, m)
+		g.route(m)
 	}
 }
 
 func (g *Gateway) handleLanguageServerEvent(server *languageserver.Server, m *jsonrpc.Message) {
-	relay(g.log, server, g.client, m, "client")
+	if !m.IsRequest() {
+		if err := g.client.Notify(m.Method, m.Params); err != nil {
+			g.log.Error("language server notification failed", "server", server.Name(), "method", m.Method, "error", err)
+		}
+		return
+	}
+
+	ch, err := g.client.Call(m.Method, m.Params)
+	if err != nil {
+		_ = server.Reply(*m.ID, nil, &jsonrpc.Error{
+			Code:    jsonrpc.CodeInternalError,
+			Message: fmt.Sprintf("rolling-star: failed to forward %s to client: %v", m.Method, err),
+		})
+		return
+	}
+
+	id := *m.ID
+	go func() {
+		msg := <-ch
+		_ = server.Reply(id, msg.Result, msg.Error)
+	}()
 }

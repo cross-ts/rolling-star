@@ -28,7 +28,7 @@ type initializeParams struct {
 	} `json:"workspaceFolders"`
 }
 
-func (g *Gateway) handleInitialize(ctx context.Context, c endpoint, m *jsonrpc.Message) {
+func (g *Gateway) handleInitialize(ctx context.Context, m *jsonrpc.Message) {
 	if m.ID == nil {
 		return
 	}
@@ -45,7 +45,7 @@ func (g *Gateway) handleInitialize(ctx context.Context, c endpoint, m *jsonrpc.M
 	if len(m.Params) > 0 {
 		if err := json.Unmarshal(m.Params, &rawParams); err != nil {
 			g.log.Error("initialize: failed to decode params as object", "error", err)
-			_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
+			_ = g.client.Reply(*m.ID, nil, &jsonrpc.Error{
 				Code:    jsonrpc.CodeInvalidParams,
 				Message: fmt.Sprintf("initialize: invalid params: %v", err),
 			})
@@ -60,7 +60,7 @@ func (g *Gateway) handleInitialize(ctx context.Context, c endpoint, m *jsonrpc.M
 	started, capsList := g.startLanguageServers(ctx, rawParams)
 
 	if len(started) == 0 {
-		_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
+		_ = g.client.Reply(*m.ID, nil, &jsonrpc.Error{
 			Code:    jsonrpc.CodeInternalError,
 			Message: "rolling-star: no configured server could be started and initialized",
 		})
@@ -70,7 +70,7 @@ func (g *Gateway) handleInitialize(ctx context.Context, c endpoint, m *jsonrpc.M
 	merged, err := mergeCapabilities(capsList)
 	if err != nil {
 		g.log.Error("initialize: failed to merge capabilities", "error", err)
-		_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
+		_ = g.client.Reply(*m.ID, nil, &jsonrpc.Error{
 			Code:    jsonrpc.CodeInternalError,
 			Message: fmt.Sprintf("rolling-star: failed to merge capabilities: %v", err),
 		})
@@ -86,10 +86,10 @@ func (g *Gateway) handleInitialize(ctx context.Context, c endpoint, m *jsonrpc.M
 		"serverInfo":   json.RawMessage(`{"name":"rolling-star","version":"0.1.0"}`),
 	})
 	if err != nil {
-		_ = c.Reply(*m.ID, nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: err.Error()})
+		_ = g.client.Reply(*m.ID, nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: err.Error()})
 		return
 	}
-	_ = c.Reply(*m.ID, result, nil)
+	_ = g.client.Reply(*m.ID, result, nil)
 }
 
 func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []*languageserver.Server, capsList []json.RawMessage) {
@@ -187,7 +187,7 @@ func (g *Gateway) handleInitialized() {
 	}
 }
 
-func (g *Gateway) handleShutdown(ctx context.Context, c endpoint, m *jsonrpc.Message) {
+func (g *Gateway) handleShutdown(ctx context.Context, m *jsonrpc.Message) {
 	g.shutdownAll(ctx)
 
 	g.mu.Lock()
@@ -195,7 +195,7 @@ func (g *Gateway) handleShutdown(ctx context.Context, c endpoint, m *jsonrpc.Mes
 	g.mu.Unlock()
 
 	if m.ID != nil {
-		_ = c.Reply(*m.ID, nil, nil)
+		_ = g.client.Reply(*m.ID, nil, nil)
 	}
 }
 
