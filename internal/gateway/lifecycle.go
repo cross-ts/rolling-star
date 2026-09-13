@@ -188,15 +188,20 @@ func (g *Gateway) handleInitialized() {
 }
 
 func (g *Gateway) handleShutdown(ctx context.Context, m *jsonrpc.Message) {
+	g.Shutdown(ctx)
+
+	if m.ID != nil {
+		_ = g.client.Reply(*m.ID, nil, nil)
+	}
+}
+
+// Shutdown gracefully shuts down all language servers and records the shutdown state.
+func (g *Gateway) Shutdown(ctx context.Context) {
 	g.shutdownAll(ctx)
 
 	g.mu.Lock()
 	g.shutdown = true
 	g.mu.Unlock()
-
-	if m.ID != nil {
-		_ = g.client.Reply(*m.ID, nil, nil)
-	}
 }
 
 func (g *Gateway) shutdownAll(ctx context.Context) {

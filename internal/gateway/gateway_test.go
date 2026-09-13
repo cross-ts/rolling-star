@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -18,6 +19,12 @@ import (
 type noopHandler struct{}
 
 func (noopHandler) Handle(context.Context, *jsonrpc.Conn, *jsonrpc.Message) {}
+
+type eofTransport struct{}
+
+func (eofTransport) Read([]byte) (int, error)    { return 0, io.EOF }
+func (eofTransport) Write(p []byte) (int, error) { return len(p), nil }
+func (eofTransport) Close() error                { return nil }
 
 func testLogger(t *testing.T) *slog.Logger {
 	if testing.Verbose() {
@@ -83,6 +90,18 @@ func twoServerConfig() *config.Config {
 				Selectors: []config.Selector{{Language: "yaml"}},
 			},
 		},
+	}
+}
+
+func TestGateway_ServeReturnsErrorBeforeShutdown(t *testing.T) {
+	g, err := New(nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = g.Serve(context.Background(), clientpkg.New(eofTransport{}))
+	if !errors.Is(err, errClientDisconnectedBeforeShutdown) {
+		t.Fatalf("Serve error = %v, want %v", err, errClientDisconnectedBeforeShutdown)
 	}
 }
 

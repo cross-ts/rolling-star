@@ -48,18 +48,10 @@ func run() int {
 		return 1
 	}
 
-	serveErr := g.Serve(context.Background(), client.New(transport.Stdio()))
-
-	if serveErr != nil {
-		logger.Error("connection ended with an error", "error", serveErr)
+	if err := g.Serve(context.Background(), client.New(transport.Stdio())); err != nil {
+		logger.Error("connection ended with an error", "error", err)
+		return 1
 	}
 
-	return exitCode(g)
-}
-
-func exitCode(g *gateway.Gateway) int {
-	if g.ShutdownReceived() {
-		return 0
-	}
-	return 1
+	return 0
 }
