@@ -35,7 +35,7 @@ func run() int {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		logger.Error("failed to load config", "error", err)
 		return 1
 	}
 
