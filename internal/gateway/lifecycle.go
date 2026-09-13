@@ -200,9 +200,41 @@ func (s *Session) handleInitialized() {
 }
 
 // handleShutdown fans "shutdown" out to every server, waits for all of
-// them (bounded by shutdownTimeout), marks the session as shut down, and
-// replies to the upstream request.
+// them (bounded by shutdownTimeout), marks the session as shut down
+// (this is the ONLY place that happens -- see ShutdownReceived's doc
+// comment for why Close/shutdownAll must not also set it), and replies
+// to the upstream request.
 func (s *Session) handleShutdown(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
+	s.shutdownAll(ctx)
+
+	s.mu.Lock()
+	s.shutdown = true
+	s.mu.Unlock()
+
+	if m.ID != nil {
+		_ = c.Reply(*m.ID, json.RawMessage("null"), nil)
+	}
+}
+
+// handleExit sends "exit" to every server, then gives each a grace
+// period to exit on its own before force-terminating it.
+func (s *Session) handleExit() {
+	s.exitAll()
+}
+
+// shutdownAll fans a "shutdown" request out to every currently-running
+// server and waits for all of them (bounded by shutdownTimeout). It is
+// the shared body behind both the protocol-driven handleShutdown and the
+// out-of-band Close (e.g. on SIGINT/SIGTERM, where no upstream
+// "shutdown" request was ever received to reply to).
+//
+// Deliberately does NOT set s.shutdown: that flag means "the upstream
+// client sent us shutdown", which is what ShutdownReceived reports to
+// choose an LSP-correct exit code. Close() also calls this (to shut
+// downstreams down cleanly on a signal) without the client ever having
+// sent "shutdown"; if this function set the flag, an interrupted process
+// would misreport exit code 0. Only handleShutdown sets it.
+func (s *Session) shutdownAll(ctx context.Context) {
 	servers := s.snapshotServers()
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
@@ -219,19 +251,12 @@ func (s *Session) handleShutdown(ctx context.Context, c *jsonrpc.Conn, m *jsonrp
 		}(d)
 	}
 	wg.Wait()
-
-	s.mu.Lock()
-	s.shutdown = true
-	s.mu.Unlock()
-
-	if m.ID != nil {
-		_ = c.Reply(*m.ID, json.RawMessage("null"), nil)
-	}
 }
 
-// handleExit sends "exit" to every server, then gives each a grace
-// period to exit on its own before force-terminating it.
-func (s *Session) handleExit() {
+// exitAll sends "exit" to every currently-running server, then gives
+// each a grace period to exit on its own before force-terminating it.
+// Shared body behind handleExit and Close.
+func (s *Session) exitAll() {
 	servers := s.snapshotServers()
 
 	var wg sync.WaitGroup
@@ -259,6 +284,20 @@ func (s *Session) handleExit() {
 		}(d)
 	}
 	wg.Wait()
+}
+
+// Close tears every currently-running downstream server down: "shutdown"
+// then "exit" then (after a grace period) a forced kill for any that
+// haven't exited on their own, exactly like the protocol-driven path but
+// without an upstream request/notification to answer. It is meant for
+// out-of-band teardown -- T7's main wiring calls this on SIGINT/SIGTERM
+// so an interrupted rolling-star doesn't leave orphaned child language
+// server processes behind. Calling Close after the session has already
+// shut down via the normal protocol path is safe: shutdownAll/exitAll
+// simply iterate an empty server list at that point.
+func (s *Session) Close(ctx context.Context) {
+	s.shutdownAll(ctx)
+	s.exitAll()
 }
 
 // snapshotServers returns a copy of the current server list, safe to

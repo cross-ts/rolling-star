@@ -210,7 +210,11 @@ func (s *Session) routeAndBind(uri, languageID string, warnOnMiss bool) *Downstr
 	s.docs[uri] = d
 	s.mu.Unlock()
 
-	if !ok && warnOnMiss {
+	switch {
+	case ok:
+		s.log.Info("routed document to downstream server",
+			"uri", uri, "languageId", languageID, "path", path, "server", d.Def.Name)
+	case warnOnMiss:
 		s.log.Warn("no downstream server matched document; further messages for it will be dropped",
 			"uri", uri, "languageId", languageID, "path", path)
 	}
