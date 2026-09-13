@@ -1,4 +1,4 @@
-package gateway
+package languageserver
 
 import (
 	"context"
@@ -7,10 +7,10 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
-	"github.com/cross-ts/rolling-star/internal/languageserver"
 )
 
 type messageHandler interface {
@@ -31,41 +31,28 @@ func runMessages(ctx context.Context, conn *jsonrpc.Conn, handler messageHandler
 
 type received struct {
 	Method string
-	Params json.RawMessage
 }
 
 type fakeServer struct {
-	caps        json.RawMessage
-	hoverResult json.RawMessage
-
+	caps    json.RawMessage
 	initErr *jsonrpc.Error
-
-	hangOnInitialize bool
 
 	mu       sync.Mutex
 	receipts []received
 	conn     *jsonrpc.Conn
 }
 
-var fakeInitError = jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "fake: initialize failed"}
-
 func newFakeServer(caps json.RawMessage) *fakeServer {
-	return &fakeServer{
-		caps:        caps,
-		hoverResult: json.RawMessage(`{"contents":"fake hover"}`),
-	}
+	return &fakeServer{caps: caps}
 }
 
 func (f *fakeServer) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
 	f.mu.Lock()
-	f.receipts = append(f.receipts, received{Method: m.Method, Params: m.Params})
+	f.receipts = append(f.receipts, received{Method: m.Method})
 	f.mu.Unlock()
 
 	switch m.Method {
 	case "initialize":
-		if f.hangOnInitialize {
-			return
-		}
 		if f.initErr != nil {
 			_ = c.Reply(*m.ID, nil, f.initErr)
 			return
@@ -74,17 +61,6 @@ func (f *fakeServer) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Messa
 		_ = c.Reply(*m.ID, result, nil)
 	case "shutdown":
 		_ = c.Reply(*m.ID, nil, nil)
-	case "textDocument/hover":
-		_ = c.Reply(*m.ID, f.hoverResult, nil)
-	case "initialized", "exit":
-
-	default:
-		if m.IsRequest() {
-			_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
-				Code:    jsonrpc.CodeMethodNotFound,
-				Message: "fakeServer: method not implemented: " + m.Method,
-			})
-		}
 	}
 }
 
@@ -111,24 +87,16 @@ func assertMethods(t *testing.T, fake *fakeServer, want ...string) {
 	}
 }
 
-func (f *fakeServer) PushDiagnostics(uri string, diagnostics json.RawMessage) error {
-	params, _ := json.Marshal(map[string]json.RawMessage{
-		"uri":         mustMarshal(uri),
-		"diagnostics": diagnostics,
-	})
-	return f.conn.Notify("textDocument/publishDiagnostics", params)
-}
-
-func (f *fakeServer) AskConfiguration(items json.RawMessage) (<-chan *jsonrpc.Message, error) {
-	return f.conn.Call("workspace/configuration", items)
-}
-
-func mustMarshal(v any) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
+func waitForReceipt(t *testing.T, fake *fakeServer, method string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if slices.ContainsFunc(fake.Received(), func(r received) bool { return r.Method == method }) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	return b
+	t.Fatalf("timed out waiting for %s", method)
 }
 
 type pipeProcess struct {
@@ -151,17 +119,11 @@ func (p *pipeProcess) Wait() error {
 	return nil
 }
 
-func newFakeLanguageServerFactory(byName map[string]*fakeServer) languageServerFactory {
-	return func(ctx context.Context, def config.LanguageServer) (*languageserver.Server, error) {
-		fs, ok := byName[def.Name]
-		if !ok {
-			fs = newFakeServer(json.RawMessage(`{}`))
-		}
-
+func newFakeLauncher(fs *fakeServer) launcher {
+	return func(ctx context.Context, _ config.LanguageServer) (Process, error) {
 		clientSide, serverSide := net.Pipe()
 		fs.conn = jsonrpc.NewConn(serverSide)
 		go func() { _ = runMessages(ctx, fs.conn, fs) }()
-
-		return languageserver.New(def, newPipeProcess(clientSide)), nil
+		return newPipeProcess(clientSide), nil
 	}
 }

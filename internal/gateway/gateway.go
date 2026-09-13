@@ -10,8 +10,11 @@ import (
 
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
+	"github.com/cross-ts/rolling-star/internal/languageserver"
 	"github.com/cross-ts/rolling-star/internal/router"
 )
+
+type languageServerFactory func(context.Context, config.LanguageServer) (*languageserver.Server, error)
 
 type languageServerMessage struct {
 	conn    *jsonrpc.Conn
@@ -19,16 +22,16 @@ type languageServerMessage struct {
 }
 
 type Gateway struct {
-	definitions []config.LanguageServer
-	router      *router.Router
-	log         *slog.Logger
-	launch      Launcher
+	definitions         []config.LanguageServer
+	router              *router.Router
+	log                 *slog.Logger
+	startLanguageServer languageServerFactory
 
 	client *jsonrpc.Conn
 
 	mu                     sync.Mutex
-	languageServers        []*LanguageServer
-	documentServers        map[string]*LanguageServer
+	languageServers        []*languageserver.Server
+	documentServers        map[string]*languageserver.Server
 	rootPath               string
 	shutdown               bool
 	languageServerMessages chan languageServerMessage
@@ -55,8 +58,8 @@ func New(definitions []config.LanguageServer) (*Gateway, error) {
 		definitions:            slices.Clone(definitions),
 		router:                 r,
 		log:                    slog.Default(),
-		launch:                 ExecLauncher,
-		documentServers:        make(map[string]*LanguageServer),
+		startLanguageServer:    languageserver.Start,
+		documentServers:        make(map[string]*languageserver.Server),
 		languageServerMessages: make(chan languageServerMessage),
 	}, nil
 }
