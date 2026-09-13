@@ -39,23 +39,24 @@ func run() int {
 		return 1
 	}
 
-	sess, err := gateway.New(cfg, gateway.Options{Logger: logger})
+	// TODO: 全体のConfigとgatewayのConfigを分離する
+	g, err := gateway.New(cfg.Servers, gateway.Options{Logger: logger})
 	if err != nil {
-		logger.Error("failed to build session", "error", err)
+		logger.Error("failed to build gateway", "error", err)
 		return 1
 	}
 
-	serveErr := sess.Serve(context.Background(), gateway.Stdio())
+	serveErr := g.Serve(context.Background(), gateway.Stdio())
 
 	if serveErr != nil {
 		logger.Error("connection ended with an error", "error", serveErr)
 	}
 
-	return exitCode(sess)
+	return exitCode(g)
 }
 
-func exitCode(sess *gateway.Session) int {
-	if sess.ShutdownReceived() {
+func exitCode(g *gateway.Gateway) int {
+	if g.ShutdownReceived() {
 		return 0
 	}
 	return 1

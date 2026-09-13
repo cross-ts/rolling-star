@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -41,25 +42,25 @@ var broadcastMethods = map[string]bool{
 	"$/setTrace":                          true,
 }
 
-func (s *Session) route(c *jsonrpc.Conn, m *jsonrpc.Message) {
+func (g *Gateway) route(c *jsonrpc.Conn, m *jsonrpc.Message) {
 	switch m.Method {
 	case "textDocument/didOpen":
-		s.handleDidOpen(m)
+		g.handleDidOpen(m)
 		return
 	case "textDocument/didClose":
-		s.handleDidClose(m)
+		g.handleDidClose(m)
 		return
 	case "$/cancelRequest":
 
 		return
 	}
 	if broadcastMethods[m.Method] {
-		s.broadcastNotification(m)
+		g.broadcastNotification(m)
 		return
 	}
 
 	if uri, ok := docURI(m.Params); ok {
-		s.handleDocumentMessage(c, m, uri)
+		g.handleDocumentMessage(c, m, uri)
 		return
 	}
 
@@ -78,7 +79,7 @@ func (s *Session) route(c *jsonrpc.Conn, m *jsonrpc.Message) {
 
 }
 
-func (s *Session) handleDidOpen(m *jsonrpc.Message) {
+func (g *Gateway) handleDidOpen(m *jsonrpc.Message) {
 	var p struct {
 		TextDocument struct {
 			URI        string `json:"uri"`
@@ -86,105 +87,107 @@ func (s *Session) handleDidOpen(m *jsonrpc.Message) {
 		} `json:"textDocument"`
 	}
 	if err := json.Unmarshal(m.Params, &p); err != nil {
-		s.log.Error("didOpen: failed to decode params", "error", err)
+		g.log.Error("didOpen: failed to decode params", "error", err)
 		return
 	}
 	if p.TextDocument.URI == "" {
-		s.log.Error("didOpen: missing textDocument.uri")
+		g.log.Error("didOpen: missing textDocument.uri")
 		return
 	}
 
-	d := s.routeAndBind(p.TextDocument.URI, p.TextDocument.LanguageID, true)
-	if d != nil {
-		s.relay(s.upstream, d.Conn(), m, d.Def.Name)
+	server := g.routeAndBind(p.TextDocument.URI, p.TextDocument.LanguageID, true)
+	if server != nil {
+		relay(g.log, g.upstream, server.Conn(), m, server.definition.Name)
 	}
 }
 
-func (s *Session) handleDidClose(m *jsonrpc.Message) {
+func (g *Gateway) handleDidClose(m *jsonrpc.Message) {
 	uri, ok := docURI(m.Params)
 	if !ok {
-		s.log.Error("didClose: missing uri")
+		g.log.Error("didClose: missing uri")
 		return
 	}
 
-	d, _ := s.lookupBinding(uri)
-	if d != nil {
-		s.relay(s.upstream, d.Conn(), m, d.Def.Name)
+	server, _ := g.lookupBinding(uri)
+	if server != nil {
+		relay(g.log, g.upstream, server.Conn(), m, server.definition.Name)
 	}
 
-	s.mu.Lock()
-	delete(s.docs, uri)
-	s.mu.Unlock()
+	g.mu.Lock()
+	delete(g.documentServers, uri)
+	g.mu.Unlock()
 }
 
-func (s *Session) handleDocumentMessage(c *jsonrpc.Conn, m *jsonrpc.Message, uri string) {
-	d, known := s.lookupBinding(uri)
+func (g *Gateway) handleDocumentMessage(c *jsonrpc.Conn, m *jsonrpc.Message, uri string) {
+	server, known := g.lookupBinding(uri)
 	if !known {
-		d = s.routeAndBind(uri, "", false)
+		server = g.routeAndBind(uri, "", false)
 	}
-	if d == nil {
+	if server == nil {
 		if m.IsRequest() {
 			_ = c.Reply(*m.ID, nil, nil)
 		}
 		return
 	}
-	s.relay(c, d.Conn(), m, d.Def.Name)
+	relay(g.log, c, server.Conn(), m, server.definition.Name)
 }
 
-func (s *Session) routeAndBind(uri, languageID string, warnOnMiss bool) *Downstream {
-	s.mu.Lock()
-	rootPath := s.rootPath
-	servers := s.servers
-	s.mu.Unlock()
+func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) *LanguageServer {
+	g.mu.Lock()
+	rootPath := g.rootPath
+	servers := g.languageServers
+	g.mu.Unlock()
 
 	path := router.PathForRouting(rootPath, uri)
-	serverName, matched := s.router.Route(languageID, path)
+	serverName, matched := g.router.Route(languageID, path)
 
-	var d *Downstream
+	var server *LanguageServer
 	if matched {
-		if i := slices.IndexFunc(servers, func(cand *Downstream) bool { return cand.Def.Name == serverName }); i >= 0 {
-			d = servers[i]
+		if i := slices.IndexFunc(servers, func(cand *LanguageServer) bool { return cand.definition.Name == serverName }); i >= 0 {
+			server = servers[i]
 		}
 	}
 
-	s.mu.Lock()
-	s.docs[uri] = d
-	s.mu.Unlock()
+	g.mu.Lock()
+	g.documentServers[uri] = server
+	g.mu.Unlock()
 
 	switch {
-	case d != nil:
-		s.log.Info("routed document to downstream server",
-			"uri", uri, "languageId", languageID, "path", path, "server", d.Def.Name)
+	case server != nil:
+		g.log.Info("routed document to language server",
+			"uri", uri, "languageId", languageID, "path", path, "server", server.definition.Name)
 	case matched && warnOnMiss:
 
-		s.log.Warn("document matched a routing rule, but its server is not running; further messages for it will be dropped",
+		g.log.Warn("document matched a routing rule, but its server is not running; further messages for it will be dropped",
 			"uri", uri, "languageId", languageID, "path", path, "server", serverName)
 	case warnOnMiss:
-		s.log.Warn("no downstream server matched document; further messages for it will be dropped",
+		g.log.Warn("no language server matched document; further messages for it will be dropped",
 			"uri", uri, "languageId", languageID, "path", path)
 	}
-	return d
+	return server
 }
 
-func (s *Session) lookupBinding(uri string) (d *Downstream, known bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, known = s.docs[uri]
-	return d, known
+func (g *Gateway) lookupBinding(uri string) (server *LanguageServer, known bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	server, known = g.documentServers[uri]
+	return server, known
 }
 
-func (s *Session) broadcastNotification(m *jsonrpc.Message) {
-	for _, d := range s.snapshotServers() {
-		if err := d.Conn().Notify(m.Method, m.Params); err != nil {
-			s.log.Error("broadcast notification failed", "server", d.Def.Name, "method", m.Method, "error", err)
+func (g *Gateway) broadcastNotification(m *jsonrpc.Message) {
+	for _, server := range g.snapshotLanguageServers() {
+		if err := server.Conn().Notify(m.Method, m.Params); err != nil {
+			g.log.Error("broadcast notification failed", "server", server.definition.Name, "method", m.Method, "error", err)
 		}
 	}
 }
 
-func (s *Session) relay(from, to *jsonrpc.Conn, m *jsonrpc.Message, peer string) {
+func relay(log *slog.Logger, from, to *jsonrpc.Conn, m *jsonrpc.Message, peer string) {
 	if !m.IsRequest() {
 		if err := to.Notify(m.Method, m.Params); err != nil {
-			s.log.Error("relay notification failed", "peer", peer, "method", m.Method, "error", err)
+			if log != nil {
+				log.Error("relay notification failed", "peer", peer, "method", m.Method, "error", err)
+			}
 		}
 		return
 	}

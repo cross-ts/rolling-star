@@ -18,7 +18,7 @@ const shutdownTimeout = 5 * time.Second
 
 const exitGracePeriod = 2 * time.Second
 
-var downstreamInitializeTimeout = 45 * time.Second
+var languageServerInitializeTimeout = 45 * time.Second
 
 type initializeParams struct {
 	RootURI          *string `json:"rootUri"`
@@ -27,7 +27,7 @@ type initializeParams struct {
 	} `json:"workspaceFolders"`
 }
 
-func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
+func (g *Gateway) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
 	if m.ID == nil {
 		return
 	}
@@ -35,7 +35,7 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 	var p initializeParams
 	if len(m.Params) > 0 {
 		if err := json.Unmarshal(m.Params, &p); err != nil {
-			s.log.Warn("initialize: failed to decode known fields", "error", err)
+			g.log.Warn("initialize: failed to decode known fields", "error", err)
 		}
 	}
 	rootPath := deriveRootPath(p)
@@ -43,7 +43,7 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 	rawParams := make(map[string]json.RawMessage)
 	if len(m.Params) > 0 {
 		if err := json.Unmarshal(m.Params, &rawParams); err != nil {
-			s.log.Error("initialize: failed to decode params as object", "error", err)
+			g.log.Error("initialize: failed to decode params as object", "error", err)
 			_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
 				Code:    jsonrpc.CodeInvalidParams,
 				Message: fmt.Sprintf("initialize: invalid params: %v", err),
@@ -52,11 +52,11 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 		}
 	}
 
-	s.mu.Lock()
-	s.rootPath = rootPath
-	s.mu.Unlock()
+	g.mu.Lock()
+	g.rootPath = rootPath
+	g.mu.Unlock()
 
-	started, capsList := s.startServers(ctx, rawParams)
+	started, capsList := g.startLanguageServers(ctx, rawParams)
 
 	if len(started) == 0 {
 		_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
@@ -68,7 +68,7 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 
 	merged, err := mergeCapabilities(capsList)
 	if err != nil {
-		s.log.Error("initialize: failed to merge capabilities", "error", err)
+		g.log.Error("initialize: failed to merge capabilities", "error", err)
 		_ = c.Reply(*m.ID, nil, &jsonrpc.Error{
 			Code:    jsonrpc.CodeInternalError,
 			Message: fmt.Sprintf("rolling-star: failed to merge capabilities: %v", err),
@@ -76,9 +76,9 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 		return
 	}
 
-	s.mu.Lock()
-	s.servers = started
-	s.mu.Unlock()
+	g.mu.Lock()
+	g.languageServers = started
+	g.mu.Unlock()
 
 	result, err := json.Marshal(map[string]json.RawMessage{
 		"capabilities": merged,
@@ -91,45 +91,43 @@ func (s *Session) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 	_ = c.Reply(*m.ID, result, nil)
 }
 
-func (s *Session) startServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []*Downstream, capsList []json.RawMessage) {
-	servers := make([]*Downstream, len(s.cfg.Servers))
-	caps := make([]json.RawMessage, len(s.cfg.Servers))
+func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []*LanguageServer, capsList []json.RawMessage) {
+	servers := make([]*LanguageServer, len(g.definitions))
+	caps := make([]json.RawMessage, len(g.definitions))
 
 	var wg sync.WaitGroup
-	for i, def := range s.cfg.Servers {
+	for i, def := range g.definitions {
 		wg.Go(func() {
-			params, err := buildDownstreamInitParams(rawParams)
+			params, err := buildLanguageServerInitParams(rawParams)
 			if err != nil {
-				s.log.Error("initialize: failed to build downstream params", "server", def.Name, "error", err)
+				g.log.Error("initialize: failed to build language server params", "server", def.Name, "error", err)
 				return
 			}
 
-			d, err := StartDownstream(ctx, def, s.launch)
+			server, err := StartLanguageServer(ctx, def, g.upstream, g.log, g.launch)
 			if err != nil {
-				s.log.Error("initialize: failed to start server", "server", def.Name, "error", err)
+				g.log.Error("initialize: failed to start server", "server", def.Name, "error", err)
 				return
 			}
 
-			d.sess = s
-
-			initCtx, initCancel := context.WithTimeout(ctx, downstreamInitializeTimeout)
-			serverCaps, err := d.Initialize(initCtx, params)
+			initCtx, initCancel := context.WithTimeout(ctx, languageServerInitializeTimeout)
+			serverCaps, err := server.Initialize(initCtx, params)
 			initCancel()
 			if err != nil {
-				s.log.Error("initialize: server failed to initialize", "server", def.Name, "error", err)
-				_ = d.Terminate()
+				g.log.Error("initialize: server failed to initialize", "server", def.Name, "error", err)
+				_ = server.Terminate()
 				return
 			}
 
-			servers[i] = d
+			servers[i] = server
 			caps[i] = serverCaps
 		})
 	}
 	wg.Wait()
 
-	for i, d := range servers {
-		if d != nil {
-			started = append(started, d)
+	for i, server := range servers {
+		if server != nil {
+			started = append(started, server)
 			capsList = append(capsList, caps[i])
 		}
 	}
@@ -157,7 +155,7 @@ func uriToPath(uri string) string {
 	return path
 }
 
-func buildDownstreamInitParams(raw map[string]json.RawMessage) (json.RawMessage, error) {
+func buildLanguageServerInitParams(raw map[string]json.RawMessage) (json.RawMessage, error) {
 	out := maps.Clone(raw)
 
 	pid, err := json.Marshal(os.Getpid())
@@ -173,56 +171,56 @@ func buildDownstreamInitParams(raw map[string]json.RawMessage) (json.RawMessage,
 	return params, nil
 }
 
-func (s *Session) handleInitialized() {
-	for _, d := range s.snapshotServers() {
-		if err := d.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
-			s.log.Error("initialized: failed to notify server", "server", d.Def.Name, "error", err)
+func (g *Gateway) handleInitialized() {
+	for _, server := range g.snapshotLanguageServers() {
+		if err := server.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
+			g.log.Error("initialized: failed to notify server", "server", server.definition.Name, "error", err)
 		}
 	}
 }
 
-func (s *Session) handleShutdown(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
-	s.shutdownAll(ctx)
+func (g *Gateway) handleShutdown(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
+	g.shutdownAll(ctx)
 
-	s.mu.Lock()
-	s.shutdown = true
-	s.mu.Unlock()
+	g.mu.Lock()
+	g.shutdown = true
+	g.mu.Unlock()
 
 	if m.ID != nil {
 		_ = c.Reply(*m.ID, nil, nil)
 	}
 }
 
-func (s *Session) shutdownAll(ctx context.Context) {
-	servers := s.snapshotServers()
+func (g *Gateway) shutdownAll(ctx context.Context) {
+	servers := g.snapshotLanguageServers()
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
 
 	var wg sync.WaitGroup
-	for _, d := range servers {
+	for _, server := range servers {
 		wg.Go(func() {
-			if err := d.Shutdown(shutdownCtx); err != nil {
-				s.log.Error("shutdown: server failed to shut down", "server", d.Def.Name, "error", err)
+			if err := server.Shutdown(shutdownCtx); err != nil {
+				g.log.Error("shutdown: server failed to shut down", "server", server.definition.Name, "error", err)
 			}
 		})
 	}
 	wg.Wait()
 }
 
-func (s *Session) exitAll() {
-	servers := s.snapshotServers()
+func (g *Gateway) exitAll() {
+	servers := g.snapshotLanguageServers()
 
 	var wg sync.WaitGroup
-	for _, d := range servers {
+	for _, server := range servers {
 		wg.Go(func() {
-			if err := d.Conn().Notify("exit", nil); err != nil {
-				s.log.Warn("exit: failed to notify server", "server", d.Def.Name, "error", err)
+			if err := server.Conn().Notify("exit", nil); err != nil {
+				g.log.Warn("exit: failed to notify server", "server", server.definition.Name, "error", err)
 			}
 
 			waited := make(chan struct{})
 			go func() {
-				_ = d.Wait()
+				_ = server.Wait()
 				close(waited)
 			}()
 
@@ -230,8 +228,8 @@ func (s *Session) exitAll() {
 			case <-waited:
 
 			case <-time.After(exitGracePeriod):
-				if err := d.Terminate(); err != nil {
-					s.log.Warn("exit: failed to terminate server", "server", d.Def.Name, "error", err)
+				if err := server.Terminate(); err != nil {
+					g.log.Warn("exit: failed to terminate server", "server", server.definition.Name, "error", err)
 				}
 			}
 		})
@@ -239,13 +237,8 @@ func (s *Session) exitAll() {
 	wg.Wait()
 }
 
-func (s *Session) Close(ctx context.Context) {
-	s.shutdownAll(ctx)
-	s.exitAll()
-}
-
-func (s *Session) snapshotServers() []*Downstream {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return slices.Clone(s.servers)
+func (g *Gateway) snapshotLanguageServers() []*LanguageServer {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.languageServers)
 }

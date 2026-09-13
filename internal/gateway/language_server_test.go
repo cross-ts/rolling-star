@@ -12,7 +12,7 @@ import (
 
 var fakeInitError = jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "fake: initialize failed"}
 
-func TestStartDownstream_InitializeCapabilitiesShutdown(t *testing.T) {
+func TestStartLanguageServer_InitializeCapabilitiesShutdown(t *testing.T) {
 	caps := json.RawMessage(`{"hoverProvider":true,"definitionProvider":true}`)
 	fs := newFakeServer(caps)
 	launch := newFakeLauncher(fs)
@@ -22,12 +22,12 @@ func TestStartDownstream_InitializeCapabilitiesShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	d, err := StartDownstream(ctx, def, launch)
+	server, err := StartLanguageServer(ctx, def, nil, nil, launch)
 	if err != nil {
-		t.Fatalf("StartDownstream: %v", err)
+		t.Fatalf("StartLanguageServer: %v", err)
 	}
 
-	gotCaps, err := d.Initialize(ctx, json.RawMessage(`{"processId":1}`))
+	gotCaps, err := server.Initialize(ctx, json.RawMessage(`{"processId":1}`))
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -35,36 +35,36 @@ func TestStartDownstream_InitializeCapabilitiesShutdown(t *testing.T) {
 		t.Fatalf("Initialize capabilities = %s, want %s", gotCaps, caps)
 	}
 
-	if err := d.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
+	if err := server.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("Notify initialized: %v", err)
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer shutdownCancel()
-	if err := d.Shutdown(shutdownCtx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	if err := d.Conn().Notify("exit", nil); err != nil {
+	if err := server.Conn().Notify("exit", nil); err != nil {
 		t.Fatalf("Notify exit: %v", err)
 	}
 
 	waitForReceipt(t, fs, "exit")
 
-	if err := d.Terminate(); err != nil {
+	if err := server.Terminate(); err != nil {
 		t.Fatalf("Terminate: %v", err)
 	}
 
 	select {
-	case <-d.Done():
+	case <-server.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("downstream connection did not close after Terminate")
+		t.Fatal("language server connection did not close after Terminate")
 	}
 
 	assertMethods(t, fs, "initialize", "initialized", "shutdown", "exit")
 }
 
-func TestStartDownstream_InitializeFailure(t *testing.T) {
+func TestStartLanguageServer_InitializeFailure(t *testing.T) {
 	fs := newFakeServer(json.RawMessage(`{}`))
 	fs.initErr = &fakeInitError
 	launch := newFakeLauncher(fs)
@@ -74,12 +74,12 @@ func TestStartDownstream_InitializeFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	d, err := StartDownstream(ctx, def, launch)
+	server, err := StartLanguageServer(ctx, def, nil, nil, launch)
 	if err != nil {
-		t.Fatalf("StartDownstream: %v", err)
+		t.Fatalf("StartLanguageServer: %v", err)
 	}
 
-	if _, err := d.Initialize(ctx, json.RawMessage(`{}`)); err == nil {
+	if _, err := server.Initialize(ctx, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("Initialize: expected error, got nil")
 	}
 }

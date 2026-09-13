@@ -35,15 +35,15 @@ func multiLauncher(byName map[string]*fakeServer) Launcher {
 	}
 }
 
-func newTestSession(t *testing.T, cfg *config.Config, byName map[string]*fakeServer) *jsonrpc.Conn {
+func newTestGateway(t *testing.T, cfg *config.Config, byName map[string]*fakeServer) *jsonrpc.Conn {
 	t.Helper()
-	return newTestSessionWithHandler(t, cfg, byName, noopHandler{})
+	return newTestGatewayWithHandler(t, cfg, byName, noopHandler{})
 }
 
-func newTestSessionWithHandler(t *testing.T, cfg *config.Config, byName map[string]*fakeServer, clientHandler jsonrpc.Handler) *jsonrpc.Conn {
+func newTestGatewayWithHandler(t *testing.T, cfg *config.Config, byName map[string]*fakeServer, clientHandler jsonrpc.Handler) *jsonrpc.Conn {
 	t.Helper()
 
-	sess, err := New(cfg, Options{Launcher: multiLauncher(byName), Logger: testLogger(t)})
+	g, err := New(cfg.Servers, Options{Launcher: multiLauncher(byName), Logger: testLogger(t)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -55,7 +55,7 @@ func newTestSessionWithHandler(t *testing.T, cfg *config.Config, byName map[stri
 	t.Cleanup(cancel)
 
 	go client.Run(ctx)
-	go sess.Serve(ctx, gatewaySide)
+	go g.Serve(ctx, gatewaySide)
 
 	return client
 }
@@ -92,12 +92,12 @@ func twoServerConfig() *config.Config {
 	}
 }
 
-func TestSession_InitializeFanOut(t *testing.T) {
+func TestGateway_InitializeFanOut(t *testing.T) {
 	actionsFake := newFakeServer(json.RawMessage(`{"hoverProvider":true}`))
 	yamlFake := newFakeServer(json.RawMessage(`{"definitionProvider":true}`))
 	byName := map[string]*fakeServer{"actions": actionsFake, "yaml": yamlFake}
 
-	client := newTestSession(t, twoServerConfig(), byName)
+	client := newTestGateway(t, twoServerConfig(), byName)
 
 	initParams := json.RawMessage(`{
 		"processId": 999999,
@@ -169,17 +169,17 @@ func TestSession_InitializeFanOut(t *testing.T) {
 	}
 }
 
-func TestSession_InitializePartialFailure(t *testing.T) {
+func TestGateway_InitializePartialFailure(t *testing.T) {
 	actionsFake := newFakeServer(json.RawMessage(`{"hoverProvider":true}`))
 	yamlFake := newFakeServer(json.RawMessage(`{}`))
 	yamlFake.initErr = &fakeInitError
 	byName := map[string]*fakeServer{"actions": actionsFake, "yaml": yamlFake}
 
-	client := newTestSession(t, twoServerConfig(), byName)
+	client := newTestGateway(t, twoServerConfig(), byName)
 
 	resp := mustCall(t, client, "initialize", json.RawMessage(`{"rootUri":"file:///repo"}`))
 	if resp.Error != nil {
-		t.Fatalf("initialize: unexpected error (one server failing should not fail the session): %v", resp.Error)
+		t.Fatalf("initialize: unexpected error (one server failing should not fail the gateway): %v", resp.Error)
 	}
 
 	var result struct {
@@ -195,14 +195,14 @@ func TestSession_InitializePartialFailure(t *testing.T) {
 	}
 }
 
-func TestSession_InitializeAllFail(t *testing.T) {
+func TestGateway_InitializeAllFail(t *testing.T) {
 	actionsFake := newFakeServer(json.RawMessage(`{}`))
 	actionsFake.initErr = &fakeInitError
 	yamlFake := newFakeServer(json.RawMessage(`{}`))
 	yamlFake.initErr = &fakeInitError
 	byName := map[string]*fakeServer{"actions": actionsFake, "yaml": yamlFake}
 
-	client := newTestSession(t, twoServerConfig(), byName)
+	client := newTestGateway(t, twoServerConfig(), byName)
 
 	resp := mustCall(t, client, "initialize", json.RawMessage(`{"rootUri":"file:///repo"}`))
 	if resp.Error == nil {
@@ -210,21 +210,21 @@ func TestSession_InitializeAllFail(t *testing.T) {
 	}
 }
 
-func TestSession_InitializeTimeoutDropsHungServer(t *testing.T) {
-	original := downstreamInitializeTimeout
-	downstreamInitializeTimeout = 100 * time.Millisecond
-	t.Cleanup(func() { downstreamInitializeTimeout = original })
+func TestGateway_InitializeTimeoutDropsHungServer(t *testing.T) {
+	original := languageServerInitializeTimeout
+	languageServerInitializeTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { languageServerInitializeTimeout = original })
 
 	hungFake := newFakeServer(json.RawMessage(`{}`))
 	hungFake.hangOnInitialize = true
 	okFake := newFakeServer(json.RawMessage(`{"hoverProvider":true}`))
 	byName := map[string]*fakeServer{"actions": hungFake, "yaml": okFake}
 
-	client := newTestSession(t, twoServerConfig(), byName)
+	client := newTestGateway(t, twoServerConfig(), byName)
 
 	resp := mustCall(t, client, "initialize", json.RawMessage(`{"rootUri":"file:///repo"}`))
 	if resp.Error != nil {
-		t.Fatalf("initialize: unexpected error (the surviving server should still bring the session up): %v", resp.Error)
+		t.Fatalf("initialize: unexpected error (the surviving server should still bring the gateway up): %v", resp.Error)
 	}
 
 	var result struct {
@@ -242,12 +242,12 @@ func TestSession_InitializeTimeoutDropsHungServer(t *testing.T) {
 	}
 }
 
-func TestSession_InitializedShutdownExit(t *testing.T) {
+func TestGateway_InitializedShutdownExit(t *testing.T) {
 	actionsFake := newFakeServer(json.RawMessage(`{}`))
 	yamlFake := newFakeServer(json.RawMessage(`{}`))
 	byName := map[string]*fakeServer{"actions": actionsFake, "yaml": yamlFake}
 
-	client := newTestSession(t, twoServerConfig(), byName)
+	client := newTestGateway(t, twoServerConfig(), byName)
 
 	resp := mustCall(t, client, "initialize", json.RawMessage(`{"rootUri":"file:///repo"}`))
 	if resp.Error != nil {
@@ -275,7 +275,7 @@ func TestSession_InitializedShutdownExit(t *testing.T) {
 			default:
 				return false
 			}
-		}, "timed out waiting for downstream connection to close after exit")
+		}, "timed out waiting for language server connection to close after exit")
 	}
 
 	for _, fake := range byName {
