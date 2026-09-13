@@ -26,7 +26,7 @@ func testLogger(t *testing.T) *slog.Logger {
 }
 
 func multiLauncher(byName map[string]*fakeServer) Launcher {
-	return func(ctx context.Context, def config.Server) (Process, error) {
+	return func(ctx context.Context, def config.LanguageServer) (Process, error) {
 		fs, ok := byName[def.Name]
 		if !ok {
 			fs = newFakeServer(json.RawMessage(`{}`))
@@ -77,7 +77,7 @@ func mustCall(t *testing.T, c *jsonrpc.Conn, method string, params json.RawMessa
 
 func twoServerConfig() *config.Config {
 	return &config.Config{
-		Servers: []config.Server{
+		Servers: []config.LanguageServer{
 			{
 				Name:      "actions",
 				Command:   "irrelevant",

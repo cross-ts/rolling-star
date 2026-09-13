@@ -49,7 +49,7 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 		t.Fatalf("os.Executable: %v", err)
 	}
 
-	def := config.Server{
+	def := config.LanguageServer{
 		Name:    "fakels",
 		Command: exe,
 	}

@@ -17,7 +17,7 @@ func TestStartDownstream_InitializeCapabilitiesShutdown(t *testing.T) {
 	fs := newFakeServer(caps)
 	launch := newFakeLauncher(fs)
 
-	def := config.Server{Name: "fake", Command: "irrelevant"}
+	def := config.LanguageServer{Name: "fake", Command: "irrelevant"}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -69,7 +69,7 @@ func TestStartDownstream_InitializeFailure(t *testing.T) {
 	fs.initErr = &fakeInitError
 	launch := newFakeLauncher(fs)
 
-	def := config.Server{Name: "fake", Command: "irrelevant"}
+	def := config.LanguageServer{Name: "fake", Command: "irrelevant"}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
