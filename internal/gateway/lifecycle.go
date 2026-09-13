@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"slices"
@@ -36,7 +37,7 @@ func (g *Gateway) handleInitialize(ctx context.Context, m *jsonrpc.Message) {
 	var p initializeParams
 	if len(m.Params) > 0 {
 		if err := json.Unmarshal(m.Params, &p); err != nil {
-			g.log.Warn("initialize: failed to decode known fields", "error", err)
+			slog.Warn("initialize: failed to decode known fields", "error", err)
 		}
 	}
 	rootPath := deriveRootPath(p)
@@ -44,7 +45,7 @@ func (g *Gateway) handleInitialize(ctx context.Context, m *jsonrpc.Message) {
 	rawParams := make(map[string]json.RawMessage)
 	if len(m.Params) > 0 {
 		if err := json.Unmarshal(m.Params, &rawParams); err != nil {
-			g.log.Error("initialize: failed to decode params as object", "error", err)
+			slog.Error("initialize: failed to decode params as object", "error", err)
 			_ = g.client.Reply(*m.ID, nil, &jsonrpc.Error{
 				Code:    jsonrpc.CodeInvalidParams,
 				Message: fmt.Sprintf("initialize: invalid params: %v", err),
@@ -69,7 +70,7 @@ func (g *Gateway) handleInitialize(ctx context.Context, m *jsonrpc.Message) {
 
 	merged, err := mergeCapabilities(capsList)
 	if err != nil {
-		g.log.Error("initialize: failed to merge capabilities", "error", err)
+		slog.Error("initialize: failed to merge capabilities", "error", err)
 		_ = g.client.Reply(*m.ID, nil, &jsonrpc.Error{
 			Code:    jsonrpc.CodeInternalError,
 			Message: fmt.Sprintf("rolling-star: failed to merge capabilities: %v", err),
@@ -101,20 +102,20 @@ func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string
 		wg.Go(func() {
 			params, err := buildLanguageServerInitParams(rawParams)
 			if err != nil {
-				g.log.Error("initialize: failed to build language server params", "server", def.Name, "error", err)
+				slog.Error("initialize: failed to build language server params", "server", def.Name, "error", err)
 				return
 			}
 
 			server, err := g.startLanguageServer(ctx, def)
 			if err != nil {
-				g.log.Error("initialize: failed to start server", "server", def.Name, "error", err)
+				slog.Error("initialize: failed to start server", "server", def.Name, "error", err)
 				return
 			}
 			go func() {
 				if err := server.Run(ctx, func(m *jsonrpc.Message) {
 					g.handleLanguageServerEvent(server, m)
 				}); err != nil {
-					g.log.Error("language server connection ended with an error", "server", server.Name(), "error", err)
+					slog.Error("language server connection ended with an error", "server", server.Name(), "error", err)
 				}
 			}()
 
@@ -122,7 +123,7 @@ func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string
 			serverCaps, err := server.Initialize(initCtx, params)
 			initCancel()
 			if err != nil {
-				g.log.Error("initialize: server failed to initialize", "server", def.Name, "error", err)
+				slog.Error("initialize: server failed to initialize", "server", def.Name, "error", err)
 				_ = server.Terminate()
 				return
 			}
@@ -182,7 +183,7 @@ func buildLanguageServerInitParams(raw map[string]json.RawMessage) (json.RawMess
 func (g *Gateway) handleInitialized() {
 	for _, server := range g.snapshotLanguageServers() {
 		if err := server.Notify("initialized", json.RawMessage(`{}`)); err != nil {
-			g.log.Error("initialized: failed to notify server", "server", server.Name(), "error", err)
+			slog.Error("initialized: failed to notify server", "server", server.Name(), "error", err)
 		}
 	}
 }
@@ -214,7 +215,7 @@ func (g *Gateway) shutdownAll(ctx context.Context) {
 	for _, server := range servers {
 		wg.Go(func() {
 			if err := server.Shutdown(shutdownCtx); err != nil {
-				g.log.Error("shutdown: server failed to shut down", "server", server.Name(), "error", err)
+				slog.Error("shutdown: server failed to shut down", "server", server.Name(), "error", err)
 			}
 		})
 	}
@@ -228,7 +229,7 @@ func (g *Gateway) exitAll() {
 	for _, server := range servers {
 		wg.Go(func() {
 			if err := server.Notify("exit", nil); err != nil {
-				g.log.Warn("exit: failed to notify server", "server", server.Name(), "error", err)
+				slog.Warn("exit: failed to notify server", "server", server.Name(), "error", err)
 			}
 
 			waited := make(chan struct{})
@@ -242,7 +243,7 @@ func (g *Gateway) exitAll() {
 
 			case <-time.After(exitGracePeriod):
 				if err := server.Terminate(); err != nil {
-					g.log.Warn("exit: failed to terminate server", "server", server.Name(), "error", err)
+					slog.Warn("exit: failed to terminate server", "server", server.Name(), "error", err)
 				}
 			}
 		})
