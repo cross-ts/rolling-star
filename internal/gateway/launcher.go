@@ -16,9 +16,9 @@ type Process interface {
 	Wait() error
 }
 
-type Launcher func(ctx context.Context, def config.Server) (Process, error)
+type Launcher func(ctx context.Context, def config.LanguageServer) (Process, error)
 
-func ExecLauncher(ctx context.Context, def config.Server) (Process, error) {
+func ExecLauncher(ctx context.Context, def config.LanguageServer) (Process, error) {
 	cmd := exec.CommandContext(ctx, def.Command, def.Args...)
 	cmd.Env = os.Environ()
 
