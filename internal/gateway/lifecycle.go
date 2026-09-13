@@ -28,7 +28,7 @@ type initializeParams struct {
 	} `json:"workspaceFolders"`
 }
 
-func (g *Gateway) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
+func (g *Gateway) handleInitialize(ctx context.Context, c endpoint, m *jsonrpc.Message) {
 	if m.ID == nil {
 		return
 	}
@@ -181,13 +181,13 @@ func buildLanguageServerInitParams(raw map[string]json.RawMessage) (json.RawMess
 
 func (g *Gateway) handleInitialized() {
 	for _, server := range g.snapshotLanguageServers() {
-		if err := server.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
+		if err := server.Notify("initialized", json.RawMessage(`{}`)); err != nil {
 			g.log.Error("initialized: failed to notify server", "server", server.Name(), "error", err)
 		}
 	}
 }
 
-func (g *Gateway) handleShutdown(ctx context.Context, c *jsonrpc.Conn, m *jsonrpc.Message) {
+func (g *Gateway) handleShutdown(ctx context.Context, c endpoint, m *jsonrpc.Message) {
 	g.shutdownAll(ctx)
 
 	g.mu.Lock()
@@ -222,7 +222,7 @@ func (g *Gateway) exitAll() {
 	var wg sync.WaitGroup
 	for _, server := range servers {
 		wg.Go(func() {
-			if err := server.Conn().Notify("exit", nil); err != nil {
+			if err := server.Notify("exit", nil); err != nil {
 				g.log.Warn("exit: failed to notify server", "server", server.Name(), "error", err)
 			}
 

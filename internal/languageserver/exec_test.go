@@ -62,7 +62,7 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	go func() { _ = runMessages(ctx, server.Conn(), nil) }()
+	go func() { _ = server.Run(ctx, nil) }()
 
 	caps, err := server.Initialize(ctx, json.RawMessage(`{}`))
 	if err != nil {
@@ -72,7 +72,7 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 		t.Errorf("Initialize capabilities = %s, want {\"hoverProvider\":true}", caps)
 	}
 
-	if err := server.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
+	if err := server.Notify("initialized", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("Notify initialized: %v", err)
 	}
 
@@ -82,7 +82,7 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	if err := server.Conn().Notify("exit", nil); err != nil {
+	if err := server.Notify("exit", nil); err != nil {
 		t.Fatalf("Notify exit: %v", err)
 	}
 

@@ -42,7 +42,17 @@ func start(ctx context.Context, def config.LanguageServer, launch launcher) (*Se
 
 func (s *Server) Name() string { return s.definition.Name }
 
-func (s *Server) Conn() *jsonrpc.Conn { return s.conn }
+func (s *Server) Notify(method string, params json.RawMessage) error {
+	return s.conn.Notify(method, params)
+}
+
+func (s *Server) Call(method string, params json.RawMessage) (<-chan *jsonrpc.Message, error) {
+	return s.conn.Call(method, params)
+}
+
+func (s *Server) Reply(id jsonrpc.ID, result json.RawMessage, e *jsonrpc.Error) error {
+	return s.conn.Reply(id, result, e)
+}
 
 func (s *Server) Done() <-chan struct{} { return s.conn.Done() }
 

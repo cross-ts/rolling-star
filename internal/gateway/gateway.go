@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -15,6 +16,12 @@ import (
 )
 
 type languageServerFactory func(context.Context, config.LanguageServer) (*languageserver.Server, error)
+
+type endpoint interface {
+	Notify(string, json.RawMessage) error
+	Call(string, json.RawMessage) (<-chan *jsonrpc.Message, error)
+	Reply(jsonrpc.ID, json.RawMessage, *jsonrpc.Error) error
+}
 
 type Gateway struct {
 	definitions         []config.LanguageServer
@@ -71,21 +78,20 @@ func (g *Gateway) ShutdownReceived() bool {
 }
 
 func (g *Gateway) handleClientEvent(ctx context.Context, m *jsonrpc.Message) {
-	c := g.client.Conn()
 	switch m.Method {
 	case "initialize":
-		g.handleInitialize(ctx, c, m)
+		g.handleInitialize(ctx, g.client, m)
 	case "initialized":
 		g.handleInitialized()
 	case "shutdown":
-		g.handleShutdown(ctx, c, m)
+		g.handleShutdown(ctx, g.client, m)
 	case "exit":
 		g.exitAll()
 	default:
-		g.route(c, m)
+		g.route(g.client, m)
 	}
 }
 
 func (g *Gateway) handleLanguageServerEvent(server *languageserver.Server, m *jsonrpc.Message) {
-	relay(g.log, server.Conn(), g.client.Conn(), m, "client")
+	relay(g.log, server, g.client, m, "client")
 }
