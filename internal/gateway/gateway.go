@@ -13,10 +13,22 @@ import (
 	"github.com/cross-ts/rolling-star/internal/router"
 )
 
-type Options struct {
-	Launcher Launcher
+type Option func(*Gateway)
 
-	Logger *slog.Logger
+func WithLauncher(launcher Launcher) Option {
+	return func(g *Gateway) {
+		if launcher != nil {
+			g.launch = launcher
+		}
+	}
+}
+
+func WithLogger(logger *slog.Logger) Option {
+	return func(g *Gateway) {
+		if logger != nil {
+			g.log = logger
+		}
+	}
 }
 
 type languageServerMessage struct {
@@ -40,7 +52,7 @@ type Gateway struct {
 	languageServerMessages chan languageServerMessage
 }
 
-func New(definitions []config.LanguageServer, opts Options) (*Gateway, error) {
+func New(definitions []config.LanguageServer, options ...Option) (*Gateway, error) {
 	var rules []router.Rule
 	for _, def := range definitions {
 		for _, sel := range def.Selectors {
@@ -57,23 +69,23 @@ func New(definitions []config.LanguageServer, opts Options) (*Gateway, error) {
 		return nil, fmt.Errorf("gateway: create router: %w", err)
 	}
 
-	launch := opts.Launcher
-	if launch == nil {
-		launch = ExecLauncher
-	}
-	log := opts.Logger
-	if log == nil {
-		log = slog.New(slog.NewTextHandler(io.Discard, nil))
-	}
-
-	return &Gateway{
+	g := &Gateway{
 		definitions:            slices.Clone(definitions),
 		router:                 r,
-		log:                    log,
-		launch:                 launch,
+		launch:                 ExecLauncher,
 		documentServers:        make(map[string]*LanguageServer),
 		languageServerMessages: make(chan languageServerMessage),
-	}, nil
+	}
+	for _, option := range options {
+		if option != nil {
+			option(g)
+		}
+	}
+	if g.log == nil {
+		g.log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	return g, nil
 }
 
 func (g *Gateway) Serve(ctx context.Context, transport io.ReadWriteCloser) error {
