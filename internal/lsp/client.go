@@ -1,4 +1,4 @@
-package client
+package lsp
 
 import (
 	"context"
@@ -12,7 +12,7 @@ type Client struct {
 	conn *jsonrpc.Conn
 }
 
-func New(transport io.ReadWriteCloser) *Client {
+func NewClient(transport io.ReadWriteCloser) *Client {
 	return &Client{conn: jsonrpc.NewConn(transport)}
 }
 

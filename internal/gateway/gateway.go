@@ -8,14 +8,13 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/cross-ts/rolling-star/internal/client"
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
-	"github.com/cross-ts/rolling-star/internal/languageserver"
+	"github.com/cross-ts/rolling-star/internal/lsp"
 	"github.com/cross-ts/rolling-star/internal/router"
 )
 
-type languageServerFactory func(context.Context, config.LanguageServer) (*languageserver.Server, error)
+type languageServerFactory func(context.Context, lsp.ServerDefinition) (*lsp.Server, error)
 
 var errClientDisconnectedBeforeShutdown = errors.New("gateway: client disconnected before shutdown")
 
@@ -24,11 +23,11 @@ type Gateway struct {
 	router              *router.Router
 	startLanguageServer languageServerFactory
 
-	client *client.Client
+	client *lsp.Client
 
 	mu              sync.Mutex
-	languageServers []*languageserver.Server
-	documentServers map[string]*languageserver.Server
+	languageServers []*lsp.Server
+	documentServers map[string]*lsp.Server
 	rootPath        string
 	shutdown        bool
 }
@@ -53,12 +52,12 @@ func New(definitions []config.LanguageServer) (*Gateway, error) {
 	return &Gateway{
 		definitions:         slices.Clone(definitions),
 		router:              r,
-		startLanguageServer: languageserver.Start,
-		documentServers:     make(map[string]*languageserver.Server),
+		startLanguageServer: lsp.Start,
+		documentServers:     make(map[string]*lsp.Server),
 	}, nil
 }
 
-func (g *Gateway) Serve(ctx context.Context, client *client.Client) error {
+func (g *Gateway) Serve(ctx context.Context, client *lsp.Client) error {
 	g.client = client
 	if err := client.Run(ctx, func(m *jsonrpc.Message) {
 		g.handleClientEvent(ctx, m)
@@ -90,7 +89,7 @@ func (g *Gateway) handleClientEvent(ctx context.Context, m *jsonrpc.Message) {
 	}
 }
 
-func (g *Gateway) handleLanguageServerEvent(server *languageserver.Server, m *jsonrpc.Message) {
+func (g *Gateway) handleLanguageServerEvent(server *lsp.Server, m *jsonrpc.Message) {
 	if !m.IsRequest() {
 		if err := g.client.Notify(m.Method, m.Params); err != nil {
 			slog.Error("language server notification failed", "server", server.Name(), "method", m.Method, "error", err)

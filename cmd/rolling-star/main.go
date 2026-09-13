@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/cross-ts/rolling-star/internal/client"
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/gateway"
+	"github.com/cross-ts/rolling-star/internal/lsp"
 	"github.com/cross-ts/rolling-star/internal/transport"
 )
 
@@ -46,7 +46,7 @@ func run() int {
 		return 1
 	}
 
-	if err := g.Serve(context.Background(), client.New(transport.Stdio())); err != nil {
+	if err := g.Serve(context.Background(), lsp.NewClient(transport.Stdio())); err != nil {
 		slog.Error("connection ended with an error", "error", err)
 		return 1
 	}

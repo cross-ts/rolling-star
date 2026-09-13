@@ -1,4 +1,4 @@
-package languageserver
+package lsp
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 )
 
@@ -17,7 +16,7 @@ func TestStart_InitializeCapabilitiesShutdown(t *testing.T) {
 	fs := newFakeServer(caps)
 	launch := newFakeLauncher(fs)
 
-	def := config.LanguageServer{Name: "fake", Command: "irrelevant"}
+	def := ServerDefinition{Name: "fake", Command: "irrelevant"}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -70,7 +69,7 @@ func TestStart_InitializeFailure(t *testing.T) {
 	fs.initErr = &fakeInitError
 	launch := newFakeLauncher(fs)
 
-	def := config.LanguageServer{Name: "fake", Command: "irrelevant"}
+	def := ServerDefinition{Name: "fake", Command: "irrelevant"}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
