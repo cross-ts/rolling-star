@@ -1,0 +1,6 @@
+servers:
+  - name: badpattern
+    command: some-language-server
+    selectors:
+      - language: yaml
+        pattern: "[abc"

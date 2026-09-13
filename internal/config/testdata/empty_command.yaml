@@ -1,0 +1,5 @@
+servers:
+  - name: nocommand
+    command: ""
+    selectors:
+      - language: go

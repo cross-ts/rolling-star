@@ -1,0 +1,6 @@
+servers:
+  - name: emptyselector
+    command: some-language-server
+    selectors:
+      - language: ""
+        pattern: ""

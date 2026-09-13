@@ -1,0 +1,6 @@
+servers:
+  - name: strict
+    command: some-language-server
+    bogusField: true
+    selectors:
+      - language: go
