@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
+	"github.com/cross-ts/rolling-star/internal/languageserver"
 	"github.com/cross-ts/rolling-star/internal/router"
 )
 
@@ -132,7 +133,7 @@ func (g *Gateway) handleDocumentMessage(c *jsonrpc.Conn, m *jsonrpc.Message, uri
 	relay(g.log, c, server.Conn(), m, server.Name())
 }
 
-func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) languageServer {
+func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) *languageserver.Server {
 	g.mu.Lock()
 	rootPath := g.rootPath
 	servers := g.languageServers
@@ -141,9 +142,9 @@ func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) language
 	path := router.PathForRouting(rootPath, uri)
 	serverName, matched := g.router.Route(languageID, path)
 
-	var server languageServer
+	var server *languageserver.Server
 	if matched {
-		if i := slices.IndexFunc(servers, func(cand languageServer) bool { return cand.Name() == serverName }); i >= 0 {
+		if i := slices.IndexFunc(servers, func(cand *languageserver.Server) bool { return cand.Name() == serverName }); i >= 0 {
 			server = servers[i]
 		}
 	}
@@ -167,7 +168,7 @@ func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) language
 	return server
 }
 
-func (g *Gateway) lookupBinding(uri string) (server languageServer, known bool) {
+func (g *Gateway) lookupBinding(uri string) (server *languageserver.Server, known bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	server, known = g.documentServers[uri]

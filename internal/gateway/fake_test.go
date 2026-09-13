@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"slices"
 	"sync"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
+	"github.com/cross-ts/rolling-star/internal/languageserver"
 )
 
 type messageHandler interface {
@@ -151,14 +151,8 @@ func (p *pipeProcess) Wait() error {
 	return nil
 }
 
-type fakeLanguageServer struct {
-	name string
-	conn *jsonrpc.Conn
-	proc *pipeProcess
-}
-
 func newFakeLanguageServerFactory(byName map[string]*fakeServer) languageServerFactory {
-	return func(ctx context.Context, def config.LanguageServer) (languageServer, error) {
+	return func(ctx context.Context, def config.LanguageServer) (*languageserver.Server, error) {
 		fs, ok := byName[def.Name]
 		if !ok {
 			fs = newFakeServer(json.RawMessage(`{}`))
@@ -168,54 +162,6 @@ func newFakeLanguageServerFactory(byName map[string]*fakeServer) languageServerF
 		fs.conn = jsonrpc.NewConn(serverSide)
 		go func() { _ = runMessages(ctx, fs.conn, fs) }()
 
-		return &fakeLanguageServer{
-			name: def.Name,
-			conn: jsonrpc.NewConn(clientSide),
-			proc: newPipeProcess(clientSide),
-		}, nil
-	}
-}
-
-func (s *fakeLanguageServer) Name() string { return s.name }
-
-func (s *fakeLanguageServer) Conn() *jsonrpc.Conn { return s.conn }
-
-func (s *fakeLanguageServer) Wait() error { return s.proc.Wait() }
-
-func (s *fakeLanguageServer) Terminate() error { return s.proc.Close() }
-
-func (s *fakeLanguageServer) Initialize(ctx context.Context, params json.RawMessage) (json.RawMessage, error) {
-	result, err := s.call(ctx, "initialize", params)
-	if err != nil {
-		return nil, err
-	}
-
-	var decoded struct {
-		Capabilities json.RawMessage `json:"capabilities"`
-	}
-	if err := json.Unmarshal(result, &decoded); err != nil {
-		return nil, fmt.Errorf("fake language server: initialize: decode result: %w", err)
-	}
-	return decoded.Capabilities, nil
-}
-
-func (s *fakeLanguageServer) Shutdown(ctx context.Context) error {
-	_, err := s.call(ctx, "shutdown", nil)
-	return err
-}
-
-func (s *fakeLanguageServer) call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
-	ch, err := s.conn.Call(method, params)
-	if err != nil {
-		return nil, err
-	}
-	select {
-	case msg := <-ch:
-		if msg.Error != nil {
-			return nil, msg.Error
-		}
-		return msg.Result, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+		return languageserver.New(def, newPipeProcess(clientSide)), nil
 	}
 }

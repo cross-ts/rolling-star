@@ -11,14 +11,14 @@ import (
 	"github.com/cross-ts/rolling-star/internal/config"
 )
 
-type process interface {
+type Process interface {
 	io.ReadWriteCloser
 	Wait() error
 }
 
-type launcher func(ctx context.Context, def config.LanguageServer) (process, error)
+type launcher func(ctx context.Context, def config.LanguageServer) (Process, error)
 
-func execLauncher(ctx context.Context, def config.LanguageServer) (process, error) {
+func execLauncher(ctx context.Context, def config.LanguageServer) (Process, error) {
 	cmd := exec.CommandContext(ctx, def.Command, def.Args...)
 	cmd.Env = os.Environ()
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
+	"github.com/cross-ts/rolling-star/internal/languageserver"
 	"github.com/cross-ts/rolling-star/internal/router"
 )
 
@@ -91,8 +92,8 @@ func (g *Gateway) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 	_ = c.Reply(*m.ID, result, nil)
 }
 
-func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []languageServer, capsList []json.RawMessage) {
-	servers := make([]languageServer, len(g.definitions))
+func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []*languageserver.Server, capsList []json.RawMessage) {
+	servers := make([]*languageserver.Server, len(g.definitions))
 	caps := make([]json.RawMessage, len(g.definitions))
 
 	var wg sync.WaitGroup
@@ -135,7 +136,7 @@ func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string
 	return started, capsList
 }
 
-func (g *Gateway) runLanguageServer(ctx context.Context, server languageServer) {
+func (g *Gateway) runLanguageServer(ctx context.Context, server *languageserver.Server) {
 	conn := server.Conn()
 	done := make(chan error, 1)
 	go func() { done <- conn.Run(ctx) }()
@@ -257,7 +258,7 @@ func (g *Gateway) exitAll() {
 	wg.Wait()
 }
 
-func (g *Gateway) snapshotLanguageServers() []languageServer {
+func (g *Gateway) snapshotLanguageServers() []*languageserver.Server {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return slices.Clone(g.languageServers)

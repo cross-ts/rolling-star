@@ -12,8 +12,16 @@ import (
 type Server struct {
 	definition config.LanguageServer
 
-	proc process
+	proc Process
 	conn *jsonrpc.Conn
+}
+
+func New(def config.LanguageServer, proc Process) *Server {
+	return &Server{
+		definition: def,
+		proc:       proc,
+		conn:       jsonrpc.NewConn(proc),
+	}
 }
 
 func Start(ctx context.Context, def config.LanguageServer) (*Server, error) {
@@ -25,16 +33,11 @@ func start(ctx context.Context, def config.LanguageServer, launch launcher) (*Se
 		launch = execLauncher
 	}
 
-	server := &Server{definition: def}
-
 	proc, err := launch(ctx, def)
 	if err != nil {
 		return nil, fmt.Errorf("languageserver: start %s: %w", def.Name, err)
 	}
-	server.proc = proc
-	server.conn = jsonrpc.NewConn(proc)
-
-	return server, nil
+	return New(def, proc), nil
 }
 
 func (s *Server) Name() string { return s.definition.Name }

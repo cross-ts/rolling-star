@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,16 +14,7 @@ import (
 	"github.com/cross-ts/rolling-star/internal/router"
 )
 
-type languageServer interface {
-	Name() string
-	Conn() *jsonrpc.Conn
-	Initialize(context.Context, json.RawMessage) (json.RawMessage, error)
-	Shutdown(context.Context) error
-	Terminate() error
-	Wait() error
-}
-
-type languageServerFactory func(context.Context, config.LanguageServer) (languageServer, error)
+type languageServerFactory func(context.Context, config.LanguageServer) (*languageserver.Server, error)
 
 type languageServerMessage struct {
 	conn    *jsonrpc.Conn
@@ -40,8 +30,8 @@ type Gateway struct {
 	client *jsonrpc.Conn
 
 	mu                     sync.Mutex
-	languageServers        []languageServer
-	documentServers        map[string]languageServer
+	languageServers        []*languageserver.Server
+	documentServers        map[string]*languageserver.Server
 	rootPath               string
 	shutdown               bool
 	languageServerMessages chan languageServerMessage
@@ -68,14 +58,10 @@ func New(definitions []config.LanguageServer) (*Gateway, error) {
 		definitions:            slices.Clone(definitions),
 		router:                 r,
 		log:                    slog.Default(),
-		startLanguageServer:    defaultLanguageServerFactory,
-		documentServers:        make(map[string]languageServer),
+		startLanguageServer:    languageserver.Start,
+		documentServers:        make(map[string]*languageserver.Server),
 		languageServerMessages: make(chan languageServerMessage),
 	}, nil
-}
-
-func defaultLanguageServerFactory(ctx context.Context, def config.LanguageServer) (languageServer, error) {
-	return languageserver.Start(ctx, def)
 }
 
 func (g *Gateway) Serve(ctx context.Context, transport io.ReadWriteCloser) error {
