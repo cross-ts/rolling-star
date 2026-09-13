@@ -148,18 +148,31 @@ func (s *Session) handleDidClose(m *jsonrpc.Message) {
 // handleDocumentMessage handles any message other than didOpen/didClose
 // that carries a document uri: it looks up the existing binding, or -- on
 // a miss, defensively -- routes on the fly with languageID=="" and caches
-// the result (some clients issue requests before didOpen). If the
-// document is unroutable (bound to nil, whether from didOpen or from this
-// on-the-fly routing), the message is dropped silently: there is no
-// default server, and this is required for §4.3's "every later message
-// for that URI is dropped silently" to hold consistently regardless of
-// how the nil binding was reached.
+// the result (some clients issue requests before didOpen).
+//
+// If the document is unroutable (bound to nil, whether from didOpen or
+// from this on-the-fly routing):
+//   - a notification is dropped silently, per §4.3's "every later message
+//     for that URI is dropped silently" -- there is no default server and
+//     nothing sane to notify.
+//   - a request gets a reply with a null result, NOT MethodNotFound and
+//     NOT silence. Silence would leave the client blocked forever on that
+//     request (a JSON-RPC request always gets exactly one response) --
+//     that is a real, user-visible defect, not an acceptable consequence
+//     of "no default server". MethodNotFound would be a lie: the merged
+//     capabilities we advertised say the method exists, and the very same
+//     method against a *routable* document in the same session works
+//     fine. null is the LSP-conventional "no answer for this document"
+//     shape for hover/definition/completion/etc., so that's what we send.
 func (s *Session) handleDocumentMessage(c *jsonrpc.Conn, m *jsonrpc.Message, uri string) {
 	d, known := s.lookupBinding(uri)
 	if !known {
 		d = s.routeAndBind(uri, "", false)
 	}
 	if d == nil {
+		if m.IsRequest() {
+			_ = c.Reply(*m.ID, json.RawMessage("null"), nil)
+		}
 		return
 	}
 	s.forward(c, m, d)

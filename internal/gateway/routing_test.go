@@ -224,22 +224,20 @@ func TestRouting_DidCloseUnbinds(t *testing.T) {
 	// into the unexported docs map: twoServerConfig's selectors both
 	// require language==yaml, and this hover carries no languageId (no
 	// preceding didOpen since the close), so if the old binding were
-	// still cached the hover would succeed immediately; instead the
-	// on-the-fly re-route with languageID=="" fails to match, and the
-	// message is dropped exactly like any other unroutable document.
+	// still cached the hover would succeed with the fake's canned
+	// result; instead the on-the-fly re-route with languageID=="" fails
+	// to match, and the request gets a null result (unroutable-document
+	// policy), not the fake's hover response.
 	hoverParams, _ := json.Marshal(map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": 0, "character": 0},
 	})
-	ch, err := client.Call("textDocument/hover", hoverParams)
-	if err != nil {
-		t.Fatalf("call: %v", err)
+	resp := mustCall(t, client, "textDocument/hover", hoverParams)
+	if resp.Error != nil {
+		t.Fatalf("hover after didClose: unexpected error: %v", resp.Error)
 	}
-	select {
-	case msg := <-ch:
-		t.Fatalf("expected no response after didClose (binding removed, on-the-fly re-route can't match), got %+v", msg)
-	case <-time.After(300 * time.Millisecond):
-		// Expected: dropped silently.
+	if string(resp.Result) != "null" {
+		t.Errorf("hover after didClose: result = %s, want null (binding removed, re-route can't match)", resp.Result)
 	}
 }
 
@@ -280,22 +278,23 @@ func TestRouting_UnroutableDocumentIsDroppedSilently(t *testing.T) {
 		t.Fatal("unroutable document's didOpen reached a downstream server")
 	}
 
-	// A later message for the same (now known-unroutable) uri is also
-	// dropped: send a hover *request* and confirm it never gets a
-	// response within a reasonable window (dropped, not answered).
+	// A later *request* for the same (now known-unroutable) uri must
+	// still get exactly one response -- silence would leave the client
+	// blocked forever, which is a real defect, not an acceptable
+	// consequence of "no default server". It gets a null result: not
+	// MethodNotFound (the merged capabilities say the method exists, and
+	// it does work for routable documents), not an error, just "no
+	// answer for this document".
 	hoverParams, _ := json.Marshal(map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": 0, "character": 0},
 	})
-	ch, err := client.Call("textDocument/hover", hoverParams)
-	if err != nil {
-		t.Fatalf("call: %v", err)
+	resp := mustCall(t, client, "textDocument/hover", hoverParams)
+	if resp.Error != nil {
+		t.Fatalf("hover on unroutable document: unexpected error: %v", resp.Error)
 	}
-	select {
-	case msg := <-ch:
-		t.Fatalf("expected no response for an unroutable document, got %+v", msg)
-	case <-time.After(300 * time.Millisecond):
-		// Expected: dropped silently, no reply ever comes.
+	if string(resp.Result) != "null" {
+		t.Errorf("hover on unroutable document: result = %s, want null", resp.Result)
 	}
 }
 
