@@ -16,10 +16,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
-	"github.com/bmatcuk/doublestar/v4"
+	"github.com/cross-ts/rolling-star/internal/router"
 	"gopkg.in/yaml.v3"
 )
 
@@ -105,7 +106,7 @@ func Load(path string) (*Config, error) {
 // non-empty pattern being syntactically valid.
 func (c *Config) Validate() error {
 	if len(c.Servers) == 0 {
-		return fmt.Errorf("no servers defined")
+		return errors.New("no servers defined")
 	}
 
 	seen := make(map[string]bool, len(c.Servers))
@@ -131,8 +132,8 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("server[%d] (%s): selector[%d]: neither language nor pattern set", i, s.Name, j)
 			}
 			if sel.Pattern != "" {
-				if !doublestar.ValidatePattern(sel.Pattern) {
-					return fmt.Errorf("server[%d] (%s): selector[%d]: invalid pattern %q", i, s.Name, j, sel.Pattern)
+				if err := router.ValidatePattern(sel.Pattern); err != nil {
+					return fmt.Errorf("server[%d] (%s): selector[%d]: invalid pattern %q: %w", i, s.Name, j, sel.Pattern, err)
 				}
 			}
 		}

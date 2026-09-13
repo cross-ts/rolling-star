@@ -5,6 +5,7 @@
 package router
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -26,20 +27,28 @@ type Router struct {
 
 // New validates and compiles the given rules and returns a Router. It
 // returns an error naming the offending rule index and server if any
-// rule's Pattern is not a valid doublestar glob.
+// rule's Pattern is not a valid selector pattern.
 func New(rules []Rule) (*Router, error) {
 	for i, rule := range rules {
 		if rule.Pattern == "" {
 			continue
 		}
-		if !doublestar.ValidatePattern(rule.Pattern) {
-			return nil, fmt.Errorf("router: rule %d (server %q): invalid pattern %q: %w", i, rule.Server, rule.Pattern, errInvalidPattern)
+		if err := ValidatePattern(rule.Pattern); err != nil {
+			return nil, fmt.Errorf("router: rule %d (server %q): %w", i, rule.Server, err)
 		}
 	}
 	return &Router{rules: rules}, nil
 }
 
-var errInvalidPattern = fmt.Errorf("invalid doublestar pattern")
+// ValidatePattern reports whether pattern is a syntactically valid selector pattern.
+func ValidatePattern(pattern string) error {
+	if !doublestar.ValidatePattern(pattern) {
+		return fmt.Errorf("invalid pattern %q: %w", pattern, errInvalidPattern)
+	}
+	return nil
+}
+
+var errInvalidPattern = errors.New("invalid doublestar pattern")
 
 // Route performs a linear scan over the rules in order and returns the
 // server name of the first rule whose Language matches languageID (or is

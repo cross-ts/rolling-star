@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -31,16 +30,18 @@ type Conn struct {
 	r   *bufio.Reader
 	h   Handler
 
-	wmu sync.Mutex // serializes writes to rwc
+	readBuf []byte // scratch buffer reused across readFrame calls, see Run
+
+	wmu      sync.Mutex // serializes writes to rwc
+	writeBuf []byte     // scratch buffer reused across writeFrame calls, guarded by wmu
 
 	seq atomic.Int64 // source of outgoing request ids
 
 	mu      sync.Mutex
-	pending map[string]chan *Message // outgoing call id -> response channel
+	pending map[ID]chan *Message // outgoing call id -> response channel
 	closed  bool
 
-	done      chan struct{}
-	closeOnce sync.Once
+	done chan struct{}
 }
 
 // NewConn creates a Conn over rwc. h may be nil if this side never
@@ -51,7 +52,7 @@ func NewConn(rwc io.ReadWriteCloser, h Handler) *Conn {
 		rwc:     rwc,
 		r:       bufio.NewReader(rwc),
 		h:       h,
-		pending: make(map[string]chan *Message),
+		pending: make(map[ID]chan *Message),
 		done:    make(chan struct{}),
 	}
 }
@@ -72,16 +73,17 @@ func NewConn(rwc io.ReadWriteCloser, h Handler) *Conn {
 // still awaiting a response is released (see releasePending).
 func (c *Conn) Run(ctx context.Context) error {
 	defer c.releasePending()
-	defer c.closeDone()
+	defer close(c.done)
 
 	for {
-		body, err := readFrame(c.r)
+		body, err := readFrame(c.r, c.readBuf)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return fmt.Errorf("jsonrpc: run: %w", err)
 		}
+		c.readBuf = body
 
 		var m Message
 		if err := json.Unmarshal(body, &m); err != nil {
@@ -121,7 +123,6 @@ func (c *Conn) Notify(method string, params json.RawMessage) error {
 // wait off to a goroutine.
 func (c *Conn) Call(method string, params json.RawMessage) (<-chan *Message, error) {
 	id := NewIntID(c.seq.Add(1))
-	key := idKey(id)
 	ch := make(chan *Message, 1)
 
 	c.mu.Lock()
@@ -129,13 +130,13 @@ func (c *Conn) Call(method string, params json.RawMessage) (<-chan *Message, err
 		c.mu.Unlock()
 		return nil, fmt.Errorf("jsonrpc: call %s: connection closed", method)
 	}
-	c.pending[key] = ch
+	c.pending[id] = ch
 	c.mu.Unlock()
 
 	msg := &Message{JSONRPC: jsonRPCVersion, ID: &id, Method: method, Params: params}
 	if err := c.send(msg); err != nil {
 		c.mu.Lock()
-		delete(c.pending, key)
+		delete(c.pending, id)
 		c.mu.Unlock()
 		return nil, fmt.Errorf("jsonrpc: call %s: %w", method, err)
 	}
@@ -183,7 +184,7 @@ func (c *Conn) send(m *Message) error {
 	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	if err := writeFrame(c.rwc, data); err != nil {
+	if err := writeFrame(c.rwc, &c.writeBuf, data); err != nil {
 		return fmt.Errorf("jsonrpc: write: %w", err)
 	}
 	return nil
@@ -196,12 +197,11 @@ func (c *Conn) resolvePending(m *Message) {
 	if m.ID == nil {
 		return
 	}
-	key := idKey(*m.ID)
 
 	c.mu.Lock()
-	ch, ok := c.pending[key]
+	ch, ok := c.pending[*m.ID]
 	if ok {
-		delete(c.pending, key)
+		delete(c.pending, *m.ID)
 	}
 	c.mu.Unlock()
 
@@ -218,7 +218,7 @@ func (c *Conn) resolvePending(m *Message) {
 func (c *Conn) releasePending() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for key, ch := range c.pending {
+	for id, ch := range c.pending {
 		ch <- &Message{
 			JSONRPC: jsonRPCVersion,
 			Error: &Error{
@@ -227,20 +227,7 @@ func (c *Conn) releasePending() {
 			},
 		}
 		close(ch)
-		delete(c.pending, key)
+		delete(c.pending, id)
 	}
 	c.closed = true
-}
-
-func (c *Conn) closeDone() {
-	c.closeOnce.Do(func() { close(c.done) })
-}
-
-// idKey returns a collision-free map key for id: numeric id 5 and string
-// id "5" must not alias each other.
-func idKey(id ID) string {
-	if id.IsStr {
-		return "s:" + id.Str
-	}
-	return "n:" + strconv.FormatInt(id.Num, 10)
 }

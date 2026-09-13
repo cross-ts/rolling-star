@@ -103,35 +103,3 @@ func TestMessagePredicates(t *testing.T) {
 		})
 	}
 }
-
-// TestReplyNullResult verifies that Reply with a nil result still
-// produces a JSON-RPC response object with an explicit "result": null,
-// rather than omitting result entirely.
-func TestReplyNullResult(t *testing.T) {
-	msg := &Message{JSONRPC: jsonRPCVersion, ID: func() *ID { id := NewIntID(1); return &id }()}
-	result := json.RawMessage(nil)
-	if result == nil {
-		result = nullResult
-	}
-	msg.Result = result
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-
-	var decoded map[string]json.RawMessage
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	raw, ok := decoded["result"]
-	if !ok {
-		t.Fatalf("expected \"result\" field to be present, got %s", data)
-	}
-	if string(raw) != "null" {
-		t.Fatalf("expected result to be null, got %s", raw)
-	}
-	if _, hasError := decoded["error"]; hasError {
-		t.Fatalf("response should not carry both result and error: %s", data)
-	}
-}

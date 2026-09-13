@@ -6,6 +6,19 @@ import (
 	"strings"
 )
 
+// FilePath converts a file: URI to a filesystem path. ok is false for a
+// non-file scheme or an unparsable URI.
+func FilePath(uri string) (path string, ok bool) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "", false
+	}
+	if u.Scheme != "file" {
+		return "", false
+	}
+	return u.Path, true
+}
+
 // PathForRouting converts a document URI into the path that Rule patterns
 // match against.
 //
@@ -18,18 +31,13 @@ import (
 // Windows drive letters are out of scope: this function assumes POSIX-style
 // absolute paths, as produced by file: URIs on non-Windows platforms.
 func PathForRouting(rootPath, docURI string) string {
-	u, err := url.Parse(docURI)
-	if err != nil {
+	path, ok := FilePath(docURI)
+	if !ok {
 		return docURI
 	}
-	if u.Scheme != "file" {
-		return docURI
-	}
-
-	path := u.Path
 
 	rel, err := filepath.Rel(rootPath, path)
-	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err == nil && filepath.IsLocal(rel) {
 		return filepath.ToSlash(rel)
 	}
 

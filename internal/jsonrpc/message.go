@@ -3,6 +3,7 @@ package jsonrpc
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // ID is a JSON-RPC request/response id. It supports both the numeric and
@@ -19,20 +20,12 @@ func NewIntID(n int64) ID { return ID{Num: n} }
 // NewStringID returns a string ID.
 func NewStringID(s string) ID { return ID{Str: s, IsStr: true} }
 
-// String returns a human-readable representation of the id, for logging.
-func (id ID) String() string {
-	if id.IsStr {
-		return id.Str
-	}
-	return fmt.Sprintf("%d", id.Num)
-}
-
 // MarshalJSON implements json.Marshaler.
 func (id ID) MarshalJSON() ([]byte, error) {
 	if id.IsStr {
 		return json.Marshal(id.Str)
 	}
-	return json.Marshal(id.Num)
+	return strconv.AppendInt(nil, id.Num, 10), nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler, accepting either a JSON

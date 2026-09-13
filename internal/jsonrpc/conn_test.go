@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -35,9 +36,7 @@ func (h *recordingHandler) Handle(ctx context.Context, c *Conn, m *Message) {
 func (h *recordingHandler) snapshot() []*Message {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	out := make([]*Message, len(h.received))
-	copy(out, h.received)
-	return out
+	return slices.Clone(h.received)
 }
 
 func withTimeout(t *testing.T) context.Context {
@@ -47,7 +46,10 @@ func withTimeout(t *testing.T) context.Context {
 	return ctx
 }
 
-func newPipeConns(t *testing.T, serverHandler, clientHandler Handler) (server, client *Conn) {
+// newPipeConns creates a connected pair of Conns over an in-memory pipe
+// and starts both read loops (under a shared timeout context), since
+// every caller needs exactly that.
+func newPipeConns(t *testing.T, serverHandler, clientHandler Handler) (server, client *Conn, ctx context.Context) {
 	t.Helper()
 	a, b := net.Pipe()
 	server = NewConn(a, serverHandler)
@@ -56,7 +58,12 @@ func newPipeConns(t *testing.T, serverHandler, clientHandler Handler) (server, c
 		_ = server.Close()
 		_ = client.Close()
 	})
-	return server, client
+
+	ctx = withTimeout(t)
+	go func() { _ = server.Run(ctx) }()
+	go func() { _ = client.Run(ctx) }()
+
+	return server, client, ctx
 }
 
 func TestConnCallAndReply(t *testing.T) {
@@ -65,11 +72,7 @@ func TestConnCallAndReply(t *testing.T) {
 			return json.RawMessage(`{"ok":true}`), nil
 		},
 	}
-	server, client := newPipeConns(t, serverH, nil)
-
-	ctx := withTimeout(t)
-	go func() { _ = server.Run(ctx) }()
-	go func() { _ = client.Run(ctx) }()
+	_, client, ctx := newPipeConns(t, serverH, nil)
 
 	ch, err := client.Call("ping", json.RawMessage(`{"n":1}`))
 	if err != nil {
@@ -97,11 +100,7 @@ func TestConnConcurrentCallsGetDistinctIDsAndCorrectResponses(t *testing.T) {
 			return m.Params, nil
 		},
 	}
-	server, client := newPipeConns(t, serverH, nil)
-
-	ctx := withTimeout(t)
-	go func() { _ = server.Run(ctx) }()
-	go func() { _ = client.Run(ctx) }()
+	_, client, ctx := newPipeConns(t, serverH, nil)
 
 	const n = 10
 	chans := make([]<-chan *Message, n)
@@ -133,11 +132,7 @@ func TestConnNotificationOrderingPreservedRelativeToCalls(t *testing.T) {
 			return json.RawMessage(`{}`), nil
 		},
 	}
-	server, client := newPipeConns(t, serverH, nil)
-
-	ctx := withTimeout(t)
-	go func() { _ = server.Run(ctx) }()
-	go func() { _ = client.Run(ctx) }()
+	_, client, ctx := newPipeConns(t, serverH, nil)
 
 	// Send didOpen (notification), then hover (call), from the same
 	// goroutine: order on the wire must be preserved, and the handler
@@ -179,11 +174,7 @@ func TestConnErrorResponseRoundTrip(t *testing.T) {
 			}
 		},
 	}
-	server, client := newPipeConns(t, serverH, nil)
-
-	ctx := withTimeout(t)
-	go func() { _ = server.Run(ctx) }()
-	go func() { _ = client.Run(ctx) }()
+	_, client, ctx := newPipeConns(t, serverH, nil)
 
 	ch, err := client.Call("nope", nil)
 	if err != nil {
@@ -215,11 +206,7 @@ func TestConnReplyNullResultOverWire(t *testing.T) {
 			return nil, nil // nil result, no error: should become "result": null
 		},
 	}
-	server, client := newPipeConns(t, serverH, nil)
-
-	ctx := withTimeout(t)
-	go func() { _ = server.Run(ctx) }()
-	go func() { _ = client.Run(ctx) }()
+	_, client, ctx := newPipeConns(t, serverH, nil)
 
 	ch, err := client.Call("shutdown", nil)
 	if err != nil {
@@ -243,16 +230,12 @@ func TestConnReplyNullResultOverWire(t *testing.T) {
 }
 
 func TestConnPendingCallsReleasedWhenPeerCloses(t *testing.T) {
-	server, client := newPipeConns(t, nil, nil)
-
-	ctx := withTimeout(t)
-	go func() { _ = server.Run(ctx) }()
 	// client.Run must be running so that server's Call (a blocking
 	// net.Pipe write) actually completes; client's read loop just
 	// discards the request since it has no handler configured. We then
 	// close the client to simulate the peer going away and verify the
 	// server's still-pending call gets released rather than hanging.
-	go func() { _ = client.Run(ctx) }()
+	server, client, ctx := newPipeConns(t, nil, nil)
 
 	ch, err := server.Call("willNeverReply", nil)
 	if err != nil {
