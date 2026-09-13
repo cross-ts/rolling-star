@@ -40,7 +40,7 @@ func run() int {
 	}
 
 	// TODO: 全体のConfigとgatewayのConfigを分離する
-	g, err := gateway.New(cfg.Servers, gateway.Options{Logger: logger})
+	g, err := gateway.New(cfg.Servers, gateway.WithLogger(logger))
 	if err != nil {
 		logger.Error("failed to build gateway", "error", err)
 		return 1

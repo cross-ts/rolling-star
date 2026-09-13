@@ -43,7 +43,7 @@ func newTestGateway(t *testing.T, cfg *config.Config, byName map[string]*fakeSer
 func newTestGatewayWithHandler(t *testing.T, cfg *config.Config, byName map[string]*fakeServer, clientHandler messageHandler) *jsonrpc.Conn {
 	t.Helper()
 
-	g, err := New(cfg.Servers, Options{Launcher: multiLauncher(byName), Logger: testLogger(t)})
+	g, err := New(cfg.Servers, WithLauncher(multiLauncher(byName)), WithLogger(testLogger(t)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
