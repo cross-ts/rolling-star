@@ -1,22 +1,27 @@
-package languageserver
+package lsp
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 
-	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 )
 
+type ServerDefinition struct {
+	Name    string
+	Command string
+	Args    []string
+}
+
 type Server struct {
-	definition config.LanguageServer
+	definition ServerDefinition
 
 	proc Process
 	conn *jsonrpc.Conn
 }
 
-func New(def config.LanguageServer, proc Process) *Server {
+func NewServer(def ServerDefinition, proc Process) *Server {
 	return &Server{
 		definition: def,
 		proc:       proc,
@@ -24,20 +29,20 @@ func New(def config.LanguageServer, proc Process) *Server {
 	}
 }
 
-func Start(ctx context.Context, def config.LanguageServer) (*Server, error) {
+func Start(ctx context.Context, def ServerDefinition) (*Server, error) {
 	return start(ctx, def, execLauncher)
 }
 
-func start(ctx context.Context, def config.LanguageServer, launch launcher) (*Server, error) {
+func start(ctx context.Context, def ServerDefinition, launch launcher) (*Server, error) {
 	if launch == nil {
 		launch = execLauncher
 	}
 
 	proc, err := launch(ctx, def)
 	if err != nil {
-		return nil, fmt.Errorf("languageserver: start %s: %w", def.Name, err)
+		return nil, fmt.Errorf("lsp: start %s: %w", def.Name, err)
 	}
-	return New(def, proc), nil
+	return NewServer(def, proc), nil
 }
 
 func (s *Server) Name() string { return s.definition.Name }
@@ -83,16 +88,16 @@ func (s *Server) Wait() error { return s.proc.Wait() }
 func (s *Server) call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 	ch, err := s.conn.Call(method, params)
 	if err != nil {
-		return nil, fmt.Errorf("languageserver: %s: %s: %w", s.definition.Name, method, err)
+		return nil, fmt.Errorf("lsp: %s: %s: %w", s.definition.Name, method, err)
 	}
 	select {
 	case msg := <-ch:
 		if msg.Error != nil {
-			return nil, fmt.Errorf("languageserver: %s: %s: %w", s.definition.Name, method, msg.Error)
+			return nil, fmt.Errorf("lsp: %s: %s: %w", s.definition.Name, method, msg.Error)
 		}
 		return msg.Result, nil
 	case <-ctx.Done():
-		return nil, fmt.Errorf("languageserver: %s: %s: %w", s.definition.Name, method, ctx.Err())
+		return nil, fmt.Errorf("lsp: %s: %s: %w", s.definition.Name, method, ctx.Err())
 	}
 }
 
@@ -105,7 +110,7 @@ func (s *Server) Initialize(ctx context.Context, params json.RawMessage) (json.R
 		Capabilities json.RawMessage `json:"capabilities"`
 	}
 	if err := json.Unmarshal(result, &decoded); err != nil {
-		return nil, fmt.Errorf("languageserver: %s: initialize: decode result: %w", s.definition.Name, err)
+		return nil, fmt.Errorf("lsp: %s: initialize: decode result: %w", s.definition.Name, err)
 	}
 	return decoded.Capabilities, nil
 }
@@ -117,7 +122,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) Terminate() error {
 	if err := s.proc.Close(); err != nil {
-		return fmt.Errorf("languageserver: %s: terminate: %w", s.definition.Name, err)
+		return fmt.Errorf("lsp: %s: terminate: %w", s.definition.Name, err)
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-package languageserver
+package lsp
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 )
 
@@ -120,7 +119,7 @@ func (p *pipeProcess) Wait() error {
 }
 
 func newFakeLauncher(fs *fakeServer) launcher {
-	return func(ctx context.Context, _ config.LanguageServer) (Process, error) {
+	return func(ctx context.Context, _ ServerDefinition) (Process, error) {
 		clientSide, serverSide := net.Pipe()
 		fs.conn = jsonrpc.NewConn(serverSide)
 		go func() { _ = runMessages(ctx, fs.conn, fs) }()

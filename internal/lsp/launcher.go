@@ -1,4 +1,4 @@
-package languageserver
+package lsp
 
 import (
 	"bufio"
@@ -7,8 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-
-	"github.com/cross-ts/rolling-star/internal/config"
 )
 
 type Process interface {
@@ -16,27 +14,27 @@ type Process interface {
 	Wait() error
 }
 
-type launcher func(ctx context.Context, def config.LanguageServer) (Process, error)
+type launcher func(ctx context.Context, def ServerDefinition) (Process, error)
 
-func execLauncher(ctx context.Context, def config.LanguageServer) (Process, error) {
+func execLauncher(ctx context.Context, def ServerDefinition) (Process, error) {
 	cmd := exec.CommandContext(ctx, def.Command, def.Args...)
 	cmd.Env = os.Environ()
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("languageserver: %s: stdin pipe: %w", def.Name, err)
+		return nil, fmt.Errorf("lsp: %s: stdin pipe: %w", def.Name, err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("languageserver: %s: stdout pipe: %w", def.Name, err)
+		return nil, fmt.Errorf("lsp: %s: stdout pipe: %w", def.Name, err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, fmt.Errorf("languageserver: %s: stderr pipe: %w", def.Name, err)
+		return nil, fmt.Errorf("lsp: %s: stderr pipe: %w", def.Name, err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("languageserver: %s: start: %w", def.Name, err)
+		return nil, fmt.Errorf("lsp: %s: start: %w", def.Name, err)
 	}
 
 	go streamStderr(def.Name, stderr)

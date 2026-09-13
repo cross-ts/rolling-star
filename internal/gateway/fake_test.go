@@ -8,9 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
-	"github.com/cross-ts/rolling-star/internal/languageserver"
+	"github.com/cross-ts/rolling-star/internal/lsp"
 )
 
 type messageHandler interface {
@@ -152,7 +151,7 @@ func (p *pipeProcess) Wait() error {
 }
 
 func newFakeLanguageServerFactory(byName map[string]*fakeServer) languageServerFactory {
-	return func(ctx context.Context, def config.LanguageServer) (*languageserver.Server, error) {
+	return func(ctx context.Context, def lsp.ServerDefinition) (*lsp.Server, error) {
 		fs, ok := byName[def.Name]
 		if !ok {
 			fs = newFakeServer(json.RawMessage(`{}`))
@@ -162,6 +161,6 @@ func newFakeLanguageServerFactory(byName map[string]*fakeServer) languageServerF
 		fs.conn = jsonrpc.NewConn(serverSide)
 		go func() { _ = runMessages(ctx, fs.conn, fs) }()
 
-		return languageserver.New(def, newPipeProcess(clientSide)), nil
+		return lsp.NewServer(def, newPipeProcess(clientSide)), nil
 	}
 }

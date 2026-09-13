@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	clientpkg "github.com/cross-ts/rolling-star/internal/client"
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
+	"github.com/cross-ts/rolling-star/internal/lsp"
 )
 
 type noopHandler struct{}
@@ -41,7 +41,7 @@ func newTestGatewayWithHandler(t *testing.T, cfg *config.Config, byName map[stri
 
 	clientSide, gatewaySide := net.Pipe()
 	client := jsonrpc.NewConn(clientSide)
-	gatewayClient := clientpkg.New(gatewaySide)
+	gatewayClient := lsp.NewClient(gatewaySide)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -90,7 +90,7 @@ func TestGateway_ServeReturnsErrorBeforeShutdown(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	err = g.Serve(context.Background(), clientpkg.New(eofTransport{}))
+	err = g.Serve(context.Background(), lsp.NewClient(eofTransport{}))
 	if !errors.Is(err, errClientDisconnectedBeforeShutdown) {
 		t.Fatalf("Serve error = %v, want %v", err, errClientDisconnectedBeforeShutdown)
 	}

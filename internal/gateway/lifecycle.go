@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
-	"github.com/cross-ts/rolling-star/internal/languageserver"
+	"github.com/cross-ts/rolling-star/internal/lsp"
 	"github.com/cross-ts/rolling-star/internal/router"
 )
 
@@ -93,8 +93,8 @@ func (g *Gateway) handleInitialize(ctx context.Context, m *jsonrpc.Message) {
 	_ = g.client.Reply(*m.ID, result, nil)
 }
 
-func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []*languageserver.Server, capsList []json.RawMessage) {
-	servers := make([]*languageserver.Server, len(g.definitions))
+func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []*lsp.Server, capsList []json.RawMessage) {
+	servers := make([]*lsp.Server, len(g.definitions))
 	caps := make([]json.RawMessage, len(g.definitions))
 
 	var wg sync.WaitGroup
@@ -106,7 +106,11 @@ func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string
 				return
 			}
 
-			server, err := g.startLanguageServer(ctx, def)
+			server, err := g.startLanguageServer(ctx, lsp.ServerDefinition{
+				Name:    def.Name,
+				Command: def.Command,
+				Args:    def.Args,
+			})
 			if err != nil {
 				slog.Error("initialize: failed to start server", "server", def.Name, "error", err)
 				return
@@ -251,7 +255,7 @@ func (g *Gateway) exitAll() {
 	wg.Wait()
 }
 
-func (g *Gateway) snapshotLanguageServers() []*languageserver.Server {
+func (g *Gateway) snapshotLanguageServers() []*lsp.Server {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return slices.Clone(g.languageServers)

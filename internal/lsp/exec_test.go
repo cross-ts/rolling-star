@@ -1,4 +1,4 @@
-package languageserver
+package lsp
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 	"github.com/cross-ts/rolling-star/internal/transport"
 )
@@ -50,15 +49,13 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 		t.Fatalf("os.Executable: %v", err)
 	}
 
-	def := config.LanguageServer{
-		Name:    "fakels",
-		Command: exe,
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	server, err := Start(ctx, def)
+	server, err := Start(ctx, ServerDefinition{
+		Name:    "fakels",
+		Command: exe,
+	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
