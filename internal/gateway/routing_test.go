@@ -77,7 +77,7 @@ func setupRoutedSessionWithConfig(t *testing.T, cfg *config.Config) (client *jso
 
 func patternOnlyConfig() *config.Config {
 	return &config.Config{
-		Servers: []config.ServerDef{
+		Servers: []config.Server{
 			{
 				Name:      "actions",
 				Command:   "irrelevant",

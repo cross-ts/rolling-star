@@ -42,15 +42,16 @@ func runFakeLanguageServer() {
 }
 
 func TestExecLauncher_RealProcess(t *testing.T) {
+	t.Setenv("ROLLING_STAR_FAKE_LS", "1")
+
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
 	}
 
-	def := config.ServerDef{
+	def := config.Server{
 		Name:    "fakels",
 		Command: exe,
-		Env:     map[string]string{"ROLLING_STAR_FAKE_LS": "1"},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

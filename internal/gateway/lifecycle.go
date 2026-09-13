@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
 	"github.com/cross-ts/rolling-star/internal/router"
 )
@@ -99,7 +98,7 @@ func (s *Session) startServers(ctx context.Context, rawParams map[string]json.Ra
 	var wg sync.WaitGroup
 	for i, def := range s.cfg.Servers {
 		wg.Go(func() {
-			params, err := buildDownstreamInitParams(rawParams, def)
+			params, err := buildDownstreamInitParams(rawParams)
 			if err != nil {
 				s.log.Error("initialize: failed to build downstream params", "server", def.Name, "error", err)
 				return
@@ -158,7 +157,7 @@ func uriToPath(uri string) string {
 	return path
 }
 
-func buildDownstreamInitParams(raw map[string]json.RawMessage, def config.ServerDef) (json.RawMessage, error) {
+func buildDownstreamInitParams(raw map[string]json.RawMessage) (json.RawMessage, error) {
 	out := maps.Clone(raw)
 
 	pid, err := json.Marshal(os.Getpid())
@@ -167,19 +166,9 @@ func buildDownstreamInitParams(raw map[string]json.RawMessage, def config.Server
 	}
 	out["processId"] = pid
 
-	if def.InitializationOptions != nil {
-		opts, err := json.Marshal(def.InitializationOptions)
-		if err != nil {
-			return nil, fmt.Errorf("gateway: marshal initializationOptions for %s: %w", def.Name, err)
-		}
-		out["initializationOptions"] = opts
-	} else {
-		delete(out, "initializationOptions")
-	}
-
 	params, err := json.Marshal(out)
 	if err != nil {
-		return nil, fmt.Errorf("gateway: marshal initialize params for %s: %w", def.Name, err)
+		return nil, fmt.Errorf("gateway: marshal initialize params: %w", err)
 	}
 	return params, nil
 }

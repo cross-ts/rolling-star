@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -34,30 +33,6 @@ func TestLoad_Valid(t *testing.T) {
 	yamlSrv := cfg.Servers[1]
 	if yamlSrv.Name != "yaml" {
 		t.Errorf("Servers[1].Name = %q, want %q", yamlSrv.Name, "yaml")
-	}
-
-	got, err := json.Marshal(yamlSrv.InitializationOptions)
-	if err != nil {
-		t.Fatalf("json.Marshal(InitializationOptions): %v", err)
-	}
-	want := `{"yaml":{"validate":true}}`
-	if string(got) != want {
-		t.Errorf("InitializationOptions JSON = %s, want %s", got, want)
-	}
-}
-
-func TestLoad_EnvExpansion(t *testing.T) {
-	t.Setenv("ROLLING_STAR_TEST_VAR", "expanded")
-
-	cfg, err := Load("testdata/env.yaml")
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	got := cfg.Servers[0].Env["FOO"]
-	want := "prefix-expanded-suffix"
-	if got != want {
-		t.Errorf("Env[FOO] = %q, want %q", got, want)
 	}
 }
 

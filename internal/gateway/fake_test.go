@@ -133,7 +133,7 @@ func (p *pipeProcess) Wait() error {
 }
 
 func newFakeLauncher(fs *fakeServer) Launcher {
-	return func(ctx context.Context, def config.ServerDef) (Process, error) {
+	return func(ctx context.Context, def config.Server) (Process, error) {
 		clientSide, serverSide := net.Pipe()
 		fs.conn = jsonrpc.NewConn(serverSide, fs)
 		go fs.conn.Run(ctx)
