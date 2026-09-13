@@ -10,7 +10,7 @@ import (
 )
 
 type Downstream struct {
-	Def config.ServerDef
+	Def config.Server
 
 	proc Process
 	conn *jsonrpc.Conn
@@ -18,7 +18,7 @@ type Downstream struct {
 	sess *Session
 }
 
-func StartDownstream(ctx context.Context, def config.ServerDef, launch Launcher) (*Downstream, error) {
+func StartDownstream(ctx context.Context, def config.Server, launch Launcher) (*Downstream, error) {
 	if launch == nil {
 		launch = ExecLauncher
 	}

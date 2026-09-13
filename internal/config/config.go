@@ -10,19 +10,15 @@ import (
 )
 
 type Config struct {
-	Servers []ServerDef `yaml:"servers"`
+	Servers []Server `yaml:"servers"`
 }
 
-type ServerDef struct {
+type Server struct {
 	Name string `yaml:"name"`
 
 	Command string `yaml:"command"`
 
 	Args []string `yaml:"args"`
-
-	Env map[string]string `yaml:"env"`
-
-	InitializationOptions any `yaml:"initializationOptions"`
 
 	Selectors []Selector `yaml:"selectors"`
 }
@@ -45,12 +41,6 @@ func Load(path string) (*Config, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config: decode %s: %w", path, err)
-	}
-
-	for i := range cfg.Servers {
-		for k, v := range cfg.Servers[i].Env {
-			cfg.Servers[i].Env[k] = os.ExpandEnv(v)
-		}
 	}
 
 	if err := cfg.Validate(); err != nil {

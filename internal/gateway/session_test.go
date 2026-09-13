@@ -26,7 +26,7 @@ func testLogger(t *testing.T) *slog.Logger {
 }
 
 func multiLauncher(byName map[string]*fakeServer) Launcher {
-	return func(ctx context.Context, def config.ServerDef) (Process, error) {
+	return func(ctx context.Context, def config.Server) (Process, error) {
 		fs, ok := byName[def.Name]
 		if !ok {
 			fs = newFakeServer(json.RawMessage(`{}`))
@@ -77,12 +77,11 @@ func mustCall(t *testing.T, c *jsonrpc.Conn, method string, params json.RawMessa
 
 func twoServerConfig() *config.Config {
 	return &config.Config{
-		Servers: []config.ServerDef{
+		Servers: []config.Server{
 			{
-				Name:                  "actions",
-				Command:               "irrelevant",
-				InitializationOptions: map[string]any{"actions": true},
-				Selectors:             []config.Selector{{Language: "yaml", Pattern: ".github/workflows/**/*.yml"}},
+				Name:      "actions",
+				Command:   "irrelevant",
+				Selectors: []config.Selector{{Language: "yaml", Pattern: ".github/workflows/**/*.yml"}},
 			},
 			{
 				Name:      "yaml",
@@ -167,20 +166,6 @@ func TestSession_InitializeFanOut(t *testing.T) {
 		if capParam, ok := params["capabilities"]; !ok || string(capParam) != `{"textDocument":{"hover":{}}}` {
 			t.Errorf("%s: capabilities = %s, want passthrough of client's capabilities", name, capParam)
 		}
-	}
-
-	actionsParams := actionsFake.Received()[0].Params
-	var actionsDecoded map[string]json.RawMessage
-	_ = json.Unmarshal(actionsParams, &actionsDecoded)
-	if string(actionsDecoded["initializationOptions"]) != `{"actions":true}` {
-		t.Errorf("actions: initializationOptions = %s, want {\"actions\":true}", actionsDecoded["initializationOptions"])
-	}
-
-	yamlParams := yamlFake.Received()[0].Params
-	var yamlDecoded map[string]json.RawMessage
-	_ = json.Unmarshal(yamlParams, &yamlDecoded)
-	if _, present := yamlDecoded["initializationOptions"]; present {
-		t.Errorf("yaml: initializationOptions = %s, want field removed (unset in config)", yamlDecoded["initializationOptions"])
 	}
 }
 

@@ -9,9 +9,6 @@ servers:
   - name: yaml
     command: yaml-language-server
     args: ["--stdio"]
-    initializationOptions:
-      yaml:
-        validate: true
     selectors:
       - language: yaml
         pattern: "**/*.{yml,yaml}"

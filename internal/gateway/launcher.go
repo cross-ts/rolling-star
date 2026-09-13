@@ -16,14 +16,11 @@ type Process interface {
 	Wait() error
 }
 
-type Launcher func(ctx context.Context, def config.ServerDef) (Process, error)
+type Launcher func(ctx context.Context, def config.Server) (Process, error)
 
-func ExecLauncher(ctx context.Context, def config.ServerDef) (Process, error) {
+func ExecLauncher(ctx context.Context, def config.Server) (Process, error) {
 	cmd := exec.CommandContext(ctx, def.Command, def.Args...)
 	cmd.Env = os.Environ()
-	for k, v := range def.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
