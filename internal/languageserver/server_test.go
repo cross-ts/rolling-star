@@ -1,4 +1,4 @@
-package gateway
+package languageserver
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 
 var fakeInitError = jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "fake: initialize failed"}
 
-func TestStartLanguageServer_InitializeCapabilitiesShutdown(t *testing.T) {
+func TestStart_InitializeCapabilitiesShutdown(t *testing.T) {
 	caps := json.RawMessage(`{"hoverProvider":true,"definitionProvider":true}`)
 	fs := newFakeServer(caps)
 	launch := newFakeLauncher(fs)
@@ -22,9 +22,9 @@ func TestStartLanguageServer_InitializeCapabilitiesShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	server, err := StartLanguageServer(ctx, def, launch)
+	server, err := start(ctx, def, launch)
 	if err != nil {
-		t.Fatalf("StartLanguageServer: %v", err)
+		t.Fatalf("Start: %v", err)
 	}
 	go func() { _ = runMessages(ctx, server.Conn(), nil) }()
 
@@ -65,7 +65,7 @@ func TestStartLanguageServer_InitializeCapabilitiesShutdown(t *testing.T) {
 	assertMethods(t, fs, "initialize", "initialized", "shutdown", "exit")
 }
 
-func TestStartLanguageServer_InitializeFailure(t *testing.T) {
+func TestStart_InitializeFailure(t *testing.T) {
 	fs := newFakeServer(json.RawMessage(`{}`))
 	fs.initErr = &fakeInitError
 	launch := newFakeLauncher(fs)
@@ -75,9 +75,9 @@ func TestStartLanguageServer_InitializeFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	server, err := StartLanguageServer(ctx, def, launch)
+	server, err := start(ctx, def, launch)
 	if err != nil {
-		t.Fatalf("StartLanguageServer: %v", err)
+		t.Fatalf("Start: %v", err)
 	}
 	go func() { _ = runMessages(ctx, server.Conn(), nil) }()
 

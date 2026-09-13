@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,8 +11,20 @@ import (
 
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
+	"github.com/cross-ts/rolling-star/internal/languageserver"
 	"github.com/cross-ts/rolling-star/internal/router"
 )
+
+type languageServer interface {
+	Name() string
+	Conn() *jsonrpc.Conn
+	Initialize(context.Context, json.RawMessage) (json.RawMessage, error)
+	Shutdown(context.Context) error
+	Terminate() error
+	Wait() error
+}
+
+type languageServerFactory func(context.Context, config.LanguageServer) (languageServer, error)
 
 type languageServerMessage struct {
 	conn    *jsonrpc.Conn
@@ -19,16 +32,16 @@ type languageServerMessage struct {
 }
 
 type Gateway struct {
-	definitions []config.LanguageServer
-	router      *router.Router
-	log         *slog.Logger
-	launch      Launcher
+	definitions         []config.LanguageServer
+	router              *router.Router
+	log                 *slog.Logger
+	startLanguageServer languageServerFactory
 
 	client *jsonrpc.Conn
 
 	mu                     sync.Mutex
-	languageServers        []*LanguageServer
-	documentServers        map[string]*LanguageServer
+	languageServers        []languageServer
+	documentServers        map[string]languageServer
 	rootPath               string
 	shutdown               bool
 	languageServerMessages chan languageServerMessage
@@ -55,10 +68,14 @@ func New(definitions []config.LanguageServer) (*Gateway, error) {
 		definitions:            slices.Clone(definitions),
 		router:                 r,
 		log:                    slog.Default(),
-		launch:                 ExecLauncher,
-		documentServers:        make(map[string]*LanguageServer),
+		startLanguageServer:    defaultLanguageServerFactory,
+		documentServers:        make(map[string]languageServer),
 		languageServerMessages: make(chan languageServerMessage),
 	}, nil
+}
+
+func defaultLanguageServerFactory(ctx context.Context, def config.LanguageServer) (languageServer, error) {
+	return languageserver.Start(ctx, def)
 }
 
 func (g *Gateway) Serve(ctx context.Context, transport io.ReadWriteCloser) error {

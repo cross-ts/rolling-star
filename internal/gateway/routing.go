@@ -97,7 +97,7 @@ func (g *Gateway) handleDidOpen(m *jsonrpc.Message) {
 
 	server := g.routeAndBind(p.TextDocument.URI, p.TextDocument.LanguageID, true)
 	if server != nil {
-		relay(g.log, g.client, server.Conn(), m, server.definition.Name)
+		relay(g.log, g.client, server.Conn(), m, server.Name())
 	}
 }
 
@@ -110,7 +110,7 @@ func (g *Gateway) handleDidClose(m *jsonrpc.Message) {
 
 	server, _ := g.lookupBinding(uri)
 	if server != nil {
-		relay(g.log, g.client, server.Conn(), m, server.definition.Name)
+		relay(g.log, g.client, server.Conn(), m, server.Name())
 	}
 
 	g.mu.Lock()
@@ -129,10 +129,10 @@ func (g *Gateway) handleDocumentMessage(c *jsonrpc.Conn, m *jsonrpc.Message, uri
 		}
 		return
 	}
-	relay(g.log, c, server.Conn(), m, server.definition.Name)
+	relay(g.log, c, server.Conn(), m, server.Name())
 }
 
-func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) *LanguageServer {
+func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) languageServer {
 	g.mu.Lock()
 	rootPath := g.rootPath
 	servers := g.languageServers
@@ -141,9 +141,9 @@ func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) *Languag
 	path := router.PathForRouting(rootPath, uri)
 	serverName, matched := g.router.Route(languageID, path)
 
-	var server *LanguageServer
+	var server languageServer
 	if matched {
-		if i := slices.IndexFunc(servers, func(cand *LanguageServer) bool { return cand.definition.Name == serverName }); i >= 0 {
+		if i := slices.IndexFunc(servers, func(cand languageServer) bool { return cand.Name() == serverName }); i >= 0 {
 			server = servers[i]
 		}
 	}
@@ -155,7 +155,7 @@ func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) *Languag
 	switch {
 	case server != nil:
 		g.log.Info("routed document to language server",
-			"uri", uri, "languageId", languageID, "path", path, "server", server.definition.Name)
+			"uri", uri, "languageId", languageID, "path", path, "server", server.Name())
 	case matched && warnOnMiss:
 
 		g.log.Warn("document matched a routing rule, but its server is not running; further messages for it will be dropped",
@@ -167,7 +167,7 @@ func (g *Gateway) routeAndBind(uri, languageID string, warnOnMiss bool) *Languag
 	return server
 }
 
-func (g *Gateway) lookupBinding(uri string) (server *LanguageServer, known bool) {
+func (g *Gateway) lookupBinding(uri string) (server languageServer, known bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	server, known = g.documentServers[uri]
@@ -177,7 +177,7 @@ func (g *Gateway) lookupBinding(uri string) (server *LanguageServer, known bool)
 func (g *Gateway) broadcastNotification(m *jsonrpc.Message) {
 	for _, server := range g.snapshotLanguageServers() {
 		if err := server.Conn().Notify(m.Method, m.Params); err != nil {
-			g.log.Error("broadcast notification failed", "server", server.definition.Name, "method", m.Method, "error", err)
+			g.log.Error("broadcast notification failed", "server", server.Name(), "method", m.Method, "error", err)
 		}
 	}
 }

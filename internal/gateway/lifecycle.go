@@ -91,8 +91,8 @@ func (g *Gateway) handleInitialize(ctx context.Context, c *jsonrpc.Conn, m *json
 	_ = c.Reply(*m.ID, result, nil)
 }
 
-func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []*LanguageServer, capsList []json.RawMessage) {
-	servers := make([]*LanguageServer, len(g.definitions))
+func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string]json.RawMessage) (started []languageServer, capsList []json.RawMessage) {
+	servers := make([]languageServer, len(g.definitions))
 	caps := make([]json.RawMessage, len(g.definitions))
 
 	var wg sync.WaitGroup
@@ -104,7 +104,7 @@ func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string
 				return
 			}
 
-			server, err := StartLanguageServer(ctx, def, g.launch)
+			server, err := g.startLanguageServer(ctx, def)
 			if err != nil {
 				g.log.Error("initialize: failed to start server", "server", def.Name, "error", err)
 				return
@@ -135,7 +135,7 @@ func (g *Gateway) startLanguageServers(ctx context.Context, rawParams map[string
 	return started, capsList
 }
 
-func (g *Gateway) runLanguageServer(ctx context.Context, server *LanguageServer) {
+func (g *Gateway) runLanguageServer(ctx context.Context, server languageServer) {
 	conn := server.Conn()
 	done := make(chan error, 1)
 	go func() { done <- conn.Run(ctx) }()
@@ -150,7 +150,7 @@ func (g *Gateway) runLanguageServer(ctx context.Context, server *LanguageServer)
 	}
 
 	if err := <-done; err != nil {
-		g.log.Error("language server connection ended with an error", "server", server.definition.Name, "error", err)
+		g.log.Error("language server connection ended with an error", "server", server.Name(), "error", err)
 	}
 }
 
@@ -194,7 +194,7 @@ func buildLanguageServerInitParams(raw map[string]json.RawMessage) (json.RawMess
 func (g *Gateway) handleInitialized() {
 	for _, server := range g.snapshotLanguageServers() {
 		if err := server.Conn().Notify("initialized", json.RawMessage(`{}`)); err != nil {
-			g.log.Error("initialized: failed to notify server", "server", server.definition.Name, "error", err)
+			g.log.Error("initialized: failed to notify server", "server", server.Name(), "error", err)
 		}
 	}
 }
@@ -221,7 +221,7 @@ func (g *Gateway) shutdownAll(ctx context.Context) {
 	for _, server := range servers {
 		wg.Go(func() {
 			if err := server.Shutdown(shutdownCtx); err != nil {
-				g.log.Error("shutdown: server failed to shut down", "server", server.definition.Name, "error", err)
+				g.log.Error("shutdown: server failed to shut down", "server", server.Name(), "error", err)
 			}
 		})
 	}
@@ -235,7 +235,7 @@ func (g *Gateway) exitAll() {
 	for _, server := range servers {
 		wg.Go(func() {
 			if err := server.Conn().Notify("exit", nil); err != nil {
-				g.log.Warn("exit: failed to notify server", "server", server.definition.Name, "error", err)
+				g.log.Warn("exit: failed to notify server", "server", server.Name(), "error", err)
 			}
 
 			waited := make(chan struct{})
@@ -249,7 +249,7 @@ func (g *Gateway) exitAll() {
 
 			case <-time.After(exitGracePeriod):
 				if err := server.Terminate(); err != nil {
-					g.log.Warn("exit: failed to terminate server", "server", server.definition.Name, "error", err)
+					g.log.Warn("exit: failed to terminate server", "server", server.Name(), "error", err)
 				}
 			}
 		})
@@ -257,7 +257,7 @@ func (g *Gateway) exitAll() {
 	wg.Wait()
 }
 
-func (g *Gateway) snapshotLanguageServers() []*LanguageServer {
+func (g *Gateway) snapshotLanguageServers() []languageServer {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return slices.Clone(g.languageServers)

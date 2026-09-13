@@ -1,4 +1,4 @@
-package gateway
+package languageserver
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/cross-ts/rolling-star/internal/config"
 	"github.com/cross-ts/rolling-star/internal/jsonrpc"
+	"github.com/cross-ts/rolling-star/internal/transport"
 )
 
 func TestMain(m *testing.M) {
@@ -37,7 +38,7 @@ func (execFakeHandler) Handle(_ context.Context, c *jsonrpc.Conn, m *jsonrpc.Mes
 }
 
 func runFakeLanguageServer() {
-	conn := jsonrpc.NewConn(Stdio())
+	conn := jsonrpc.NewConn(transport.Stdio())
 	_ = runMessages(context.Background(), conn, execFakeHandler{})
 }
 
@@ -57,9 +58,9 @@ func TestExecLauncher_RealProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	server, err := StartLanguageServer(ctx, def, nil)
+	server, err := Start(ctx, def)
 	if err != nil {
-		t.Fatalf("StartLanguageServer: %v", err)
+		t.Fatalf("Start: %v", err)
 	}
 	go func() { _ = runMessages(ctx, server.Conn(), nil) }()
 

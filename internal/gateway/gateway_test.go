@@ -25,16 +25,6 @@ func testLogger(t *testing.T) *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func multiLauncher(byName map[string]*fakeServer) Launcher {
-	return func(ctx context.Context, def config.LanguageServer) (Process, error) {
-		fs, ok := byName[def.Name]
-		if !ok {
-			fs = newFakeServer(json.RawMessage(`{}`))
-		}
-		return newFakeLauncher(fs)(ctx, def)
-	}
-}
-
 func newTestGateway(t *testing.T, cfg *config.Config, byName map[string]*fakeServer) *jsonrpc.Conn {
 	t.Helper()
 	return newTestGatewayWithHandler(t, cfg, byName, noopHandler{})
@@ -47,7 +37,7 @@ func newTestGatewayWithHandler(t *testing.T, cfg *config.Config, byName map[stri
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	g.launch = multiLauncher(byName)
+	g.startLanguageServer = newFakeLanguageServerFactory(byName)
 	g.log = testLogger(t)
 
 	clientSide, gatewaySide := net.Pipe()
