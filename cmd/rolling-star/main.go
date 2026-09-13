@@ -31,7 +31,7 @@ func run() int {
 		return 2
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.Default()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -40,7 +40,7 @@ func run() int {
 	}
 
 	// TODO: 全体のConfigとgatewayのConfigを分離する
-	g, err := gateway.New(cfg.Servers, gateway.WithLogger(logger))
+	g, err := gateway.New(cfg.Servers)
 	if err != nil {
 		logger.Error("failed to build gateway", "error", err)
 		return 1
