@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -279,7 +280,20 @@ func (s *Session) exitAll() {
 			case <-time.After(exitGracePeriod):
 			}
 			if err := d.Terminate(); err != nil {
-				s.log.Warn("exit: failed to terminate server", "server", d.Def.Name, "error", err)
+				// A downstream that already exited on its own (the
+				// common, well-behaved case: it saw "exit" and quit
+				// before our grace period elapsed) makes the underlying
+				// Kill return os.ErrProcessDone here. That is not a
+				// failure of anything we did, so log it at Debug rather
+				// than Warn -- a "warning" that fires on every normal
+				// shutdown just trains people to ignore warnings.
+				// Anything else (still alive and refused to die, a
+				// permissions error, ...) is still a real Warn.
+				if errors.Is(err, os.ErrProcessDone) {
+					s.log.Debug("exit: server had already exited before terminate", "server", d.Def.Name)
+				} else {
+					s.log.Warn("exit: failed to terminate server", "server", d.Def.Name, "error", err)
+				}
 			}
 		}(d)
 	}
